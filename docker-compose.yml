@@ -1,0 +1,17 @@
+services:
+  annas-torrents-webui:
+    build: .
+    container_name: annas-torrents-webui
+    ports:
+      - "${WEB_PORT:-8080}:8080"  # Web UI (no auth — keep it on a trusted network)
+      - "6881:6881/tcp"    # BitTorrent peer traffic
+      - "6881:6881/udp"    # DHT / uTP
+    environment:
+      - DATA_DIR=/data
+      - TORRENT_PORT=6881
+      # Public base URL for share links (e.g. https://seed.example.com).
+      # Set via env or a .env file; unset → the browser's own origin is used.
+      - PUBLIC_URL=${PUBLIC_URL:-}
+    volumes:
+      - ./data:/data       # .torrent files, seeded content, and resume state
+    restart: unless-stopped

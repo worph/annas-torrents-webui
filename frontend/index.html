@@ -1,0 +1,317 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>Anna's Torrents · Seedbox</title>
+<style>
+  :root {
+    --bg: #0f1216; --panel: #171b21; --line: #262c35;
+    --fg: #e6e9ef; --muted: #8b94a3; --accent: #6ee7b7; --accent2: #60a5fa;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--fg);
+         font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif; }
+  header { padding: 20px 24px; border-bottom: 1px solid var(--line); display: flex;
+           align-items: baseline; gap: 12px; }
+  h1 { font-size: 18px; margin: 0; }
+  .sub { color: var(--muted); font-size: 13px; }
+  main { max-width: 1000px; margin: 0 auto; padding: 24px; }
+  .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .card .value { font-size: 24px; font-weight: 600; margin-top: 6px; }
+  .card .value small { font-size: 13px; color: var(--muted); font-weight: 400; }
+  section { margin-top: 28px; }
+  section h2 { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; }
+  .bar { height: 14px; background: #0b0e12; border-radius: 8px; overflow: hidden; border: 1px solid var(--line); }
+  .bar > div { height: 100%; background: linear-gradient(90deg, var(--accent), var(--accent2)); width: 0%; transition: width .5s; }
+  form { display: flex; flex-wrap: wrap; gap: 12px; align-items: flex-end; background: var(--panel);
+         border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin-bottom: 4px; }
+  input, button { font: inherit; }
+  input[type=number] { width: 120px; background: #0b0e12; border: 1px solid var(--line);
+                       color: var(--fg); border-radius: 8px; padding: 8px 10px; }
+  button { cursor: pointer; border: none; border-radius: 8px; padding: 9px 16px; font-weight: 600; }
+  .primary { background: var(--accent); color: #06281c; }
+  button:disabled { opacity: .5; cursor: default; }
+  .share-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 8px; }
+  .share-btn { color: #fff; padding: 8px 14px; border-radius: 8px; font-weight: 600; }
+  .share-btn.native   { background: #334155; }
+  .share-btn.x        { background: #000000; }
+  .share-btn.bluesky  { background: #0085ff; }
+  .share-btn.mastodon { background: #6364ff; }
+  .share-btn.reddit   { background: #ff4500; }
+  .share-btn.telegram { background: #229ed9; }
+  .share-btn.whatsapp { background: #25d366; }
+  .share-btn.facebook { background: #1877f2; }
+  .share-btn.linkedin { background: #0a66c2; }
+  .share-btn.email    { background: #555555; }
+  .share-btn.copy     { background: #0b0e12; border: 1px solid var(--line); color: var(--fg); }
+  .donate-btn { background: #e0245e; color: #fff; padding: 8px 14px; border-radius: 8px;
+                font-weight: 600; text-decoration: none; font-size: 13px; white-space: nowrap; }
+  header .donate-btn { margin-left: auto; align-self: center; }
+  .cta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; justify-content: space-between;
+         background: var(--panel); border: 1px solid var(--line); border-radius: 12px;
+         padding: 16px; margin-bottom: 20px; }
+  .cta-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+  .primary-link { background: var(--accent); color: #06281c; padding: 8px 14px; border-radius: 8px;
+                  font-weight: 600; text-decoration: none; font-size: 13px; white-space: nowrap; }
+  body.view-mode #provision-form { display: none; }
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
+  th { color: var(--muted); font-weight: 500; }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #0b0e12; border: 1px solid var(--line); color: var(--muted); }
+  .status-msg { color: var(--muted); font-size: 13px; margin-left: 8px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Anna's Torrents · Seedbox</h1>
+  <span class="sub">Preserving the largest open library, one torrent at a time.</span>
+  <a class="donate-btn" href="https://annas-archive.org/donate" target="_blank" rel="noopener">❤️ Donate to Anna's Archive</a>
+</header>
+
+<main>
+  <!-- Shown only on the shared /view vantage page -->
+  <div id="view-cta" class="cta" style="display:none">
+    <div>
+      <strong>You're viewing a volunteer's live Anna's Archive seedbox.</strong><br>
+      <span class="sub">Every torrent here is human knowledge being preserved for everyone — free from censorship and paywalls.</span>
+    </div>
+    <div class="cta-actions">
+      <a class="donate-btn" href="https://annas-archive.org/donate" target="_blank" rel="noopener">❤️ Donate</a>
+      <a class="primary-link" href="https://github.com/cparthiv/annas-torrents-webui" target="_blank" rel="noopener">🌱 Run your own</a>
+    </div>
+  </div>
+
+  <!-- Provisioning -->
+  <form id="provision-form">
+    <div>
+      <label for="max_tb">Contribution target (TB)</label>
+      <input type="number" id="max_tb" min="0" step="0.01" value="0.05" />
+    </div>
+    <button type="submit" class="primary" id="provision-btn">Start contributing</button>
+    <span class="status-msg" id="provision-msg"></span>
+  </form>
+
+  <!-- Coverage -->
+  <section>
+    <h2>Anna's Archive coverage</h2>
+    <div class="card">
+      <div class="value" id="cov-pct">–</div>
+      <div class="bar" style="margin-top:10px"><div id="cov-bar"></div></div>
+      <div class="sub" id="cov-detail" style="margin-top:8px"></div>
+    </div>
+  </section>
+
+  <!-- Live metrics -->
+  <section>
+    <h2>Live metrics</h2>
+    <div class="grid">
+      <div class="card"><div class="label">Upload</div><div class="value" id="m-up">–</div></div>
+      <div class="card"><div class="label">Download</div><div class="value" id="m-down">–</div></div>
+      <div class="card"><div class="label">Disk committed</div><div class="value" id="m-disk">–</div></div>
+      <div class="card"><div class="label">Torrents</div><div class="value" id="m-torrents">–</div></div>
+      <div class="card"><div class="label">Peers / DHT</div><div class="value" id="m-peers">–</div></div>
+      <div class="card"><div class="label">Total uploaded</div><div class="value" id="m-totup">–</div></div>
+    </div>
+  </section>
+
+  <!-- Share -->
+  <section>
+    <h2>Share your contribution</h2>
+    <div class="share-row">
+      <button class="share-btn native"   data-net="native" style="display:none">📲 Share…</button>
+      <button class="share-btn x"         data-net="x">𝕏</button>
+      <button class="share-btn bluesky"   data-net="bluesky">Bluesky</button>
+      <button class="share-btn mastodon"  data-net="mastodon">Mastodon</button>
+      <button class="share-btn reddit"    data-net="reddit">Reddit</button>
+      <button class="share-btn telegram"  data-net="telegram">Telegram</button>
+      <button class="share-btn whatsapp"  data-net="whatsapp">WhatsApp</button>
+      <button class="share-btn facebook"  data-net="facebook">Facebook</button>
+      <button class="share-btn linkedin"  data-net="linkedin">LinkedIn</button>
+      <button class="share-btn email"     data-net="email">Email</button>
+      <button class="share-btn copy"      data-net="copy">Copy</button>
+    </div>
+    <span class="status-msg" id="share-toast"></span>
+  </section>
+
+  <!-- Torrents table -->
+  <section>
+    <h2>Seeding</h2>
+    <table>
+      <thead><tr>
+        <th>Name</th><th>State</th><th class="num">Progress</th>
+        <th class="num">Size</th><th class="num">↑</th><th class="num">Seeds/Peers</th>
+      </tr></thead>
+      <tbody id="torrent-rows"><tr><td colspan="6" class="sub">No torrents yet.</td></tr></tbody>
+    </table>
+  </section>
+</main>
+
+<script>
+const $ = (id) => document.getElementById(id);
+
+function fmtBytes(n) {
+  if (!n) return "0 B";
+  const u = ["B","KB","MB","GB","TB","PB"]; let i = 0;
+  while (n >= 1024 && i < u.length - 1) { n /= 1024; i++; }
+  return n.toFixed(n < 10 && i > 0 ? 2 : 0) + " " + u[i];
+}
+const fmtRate = (n) => fmtBytes(n) + "/s";
+
+let latestCoverage = null;
+
+function render(s) {
+  const g = s.global, c = s.coverage;
+  $("m-up").textContent = fmtRate(g.upload_rate);
+  $("m-down").textContent = fmtRate(g.download_rate);
+  $("m-disk").innerHTML = fmtBytes(g.committed_bytes) +
+    ` <small>/ ${fmtBytes(g.disk_free)} free</small>`;
+  $("m-torrents").textContent = g.num_torrents;
+  $("m-peers").innerHTML = g.num_peers + ` <small>/ ${g.dht_nodes} DHT</small>`;
+  $("m-totup").textContent = fmtBytes(g.total_upload);
+
+  latestCoverage = c;
+  if (c.index_ready) {
+    $("cov-pct").textContent = c.percent.toFixed(c.percent < 1 ? 4 : 2) + "%";
+    $("cov-bar").style.width = Math.min(100, c.percent) + "%";
+    $("cov-detail").textContent =
+      `${fmtBytes(c.seeded_bytes)} of ${fmtBytes(c.total_bytes)} total archive`;
+  } else {
+    $("cov-pct").textContent = "…";
+    $("cov-detail").textContent = "loading archive index…";
+  }
+
+  const rows = s.torrents;
+  const tbody = $("torrent-rows");
+  if (!rows.length) {
+    tbody.innerHTML = '<tr><td colspan="6" class="sub">No torrents yet.</td></tr>';
+  } else {
+    tbody.innerHTML = rows.map(t => `
+      <tr>
+        <td title="${t.infohash}">${t.name || t.infohash.slice(0,12)}</td>
+        <td><span class="pill">${t.is_seeding ? "seeding" : t.state}</span></td>
+        <td class="num">${(t.progress*100).toFixed(1)}%</td>
+        <td class="num">${fmtBytes(t.size)}</td>
+        <td class="num">${fmtRate(t.upload_rate)}</td>
+        <td class="num">${t.num_seeds}/${t.num_peers}</td>
+      </tr>`).join("");
+  }
+
+  const p = s.provision;
+  $("provision-msg").textContent = p.running ? p.message : (p.message !== "idle" ? p.message : "");
+  $("provision-btn").disabled = p.running;
+}
+
+// Live updates via SSE, with fallback to polling.
+function connect() {
+  const es = new EventSource("/api/events");
+  es.onmessage = (e) => render(JSON.parse(e.data));
+  es.onerror = () => { es.close(); setTimeout(connect, 3000); };
+}
+connect();
+
+$("provision-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const max_tb = parseFloat($("max_tb").value);
+  $("provision-btn").disabled = true;
+  await fetch("/api/provision", {
+    method: "POST",
+    headers: {"Content-Type": "application/json"},
+    body: JSON.stringify({ max_tb })
+  });
+});
+
+// --- View mode (read-only vantage page at /view) ---------------------
+const VIEW_MODE = location.pathname.replace(/\/+$/, "") === "/view";
+if (VIEW_MODE) {
+  document.body.classList.add("view-mode");
+  const cta = document.getElementById("view-cta");
+  if (cta) cta.style.display = "flex";
+}
+
+// --- Sharing ---------------------------------------------------------
+// Share links point at THIS app's read-only vantage page, so people see the
+// live contribution — not the control panel. The base URL is PUBLIC_URL from
+// the server when set (correct behind a reverse proxy / public domain),
+// otherwise the browser's own origin.
+let publicBase = location.origin;
+fetch("/api/config")
+  .then((r) => r.json())
+  .then((cfg) => { if (cfg.public_url) publicBase = cfg.public_url.replace(/\/+$/, ""); })
+  .catch(() => {});
+
+const shareLanding = () => `${publicBase}/view`;
+
+function shareContent() {
+  const c = latestCoverage;
+  const pct = c && c.index_ready
+    ? c.percent.toFixed(c.percent < 1 ? 4 : 2) + "%"
+    : "";
+  const size = c ? fmtBytes(c.seeded_bytes) : "some data";
+  const title = "Help preserve Anna's Archive";
+  const text =
+    `📚 Anna's Archive is the largest open library in human history — books, papers, ` +
+    `and knowledge kept free from censorship, paywalls, and link rot. It survives only ` +
+    `because volunteers seed its torrents. I'm helping by seeding ${size}` +
+    (pct ? ` (${pct} of the whole library)` : "") +
+    `. Join me and keep human knowledge free for everyone:`;
+  return { title, text, url: shareLanding() };
+}
+
+const enc = encodeURIComponent;
+const SHARE_URLS = {
+  x:        ({text, url}) => `https://twitter.com/intent/tweet?text=${enc(text)}&url=${enc(url)}`,
+  bluesky:  ({text, url}) => `https://bsky.app/intent/compose?text=${enc(text + " " + url)}`,
+  reddit:   ({title, url}) => `https://www.reddit.com/submit?url=${enc(url)}&title=${enc(title)}`,
+  telegram: ({text, url}) => `https://t.me/share/url?url=${enc(url)}&text=${enc(text)}`,
+  whatsapp: ({text, url}) => `https://wa.me/?text=${enc(text + " " + url)}`,
+  facebook: ({url}) => `https://www.facebook.com/sharer/sharer.php?u=${enc(url)}`,
+  linkedin: ({url}) => `https://www.linkedin.com/sharing/share-offsite/?url=${enc(url)}`,
+  email:    ({title, text, url}) => `mailto:?subject=${enc(title)}&body=${enc(text + "\n\n" + url)}`,
+};
+
+function toast(msg) {
+  const t = $("share-toast");
+  t.textContent = msg;
+  setTimeout(() => { if (t.textContent === msg) t.textContent = ""; }, 2500);
+}
+
+async function share(net) {
+  const c = shareContent();
+  if (net === "native") {
+    try { await navigator.share(c); } catch (_) { /* user cancelled */ }
+    return;
+  }
+  if (net === "copy") {
+    try { await navigator.clipboard.writeText(c.text + " " + c.url); toast("Copied to clipboard ✓"); }
+    catch (_) { toast("Copy failed — select the text manually."); }
+    return;
+  }
+  if (net === "mastodon") {
+    let inst = localStorage.getItem("mastodonInstance");
+    if (!inst) {
+      inst = prompt("Your Mastodon instance:", "mastodon.social");
+      if (!inst) return;
+      inst = inst.replace(/^https?:\/\//, "").replace(/\/+$/, "");
+      localStorage.setItem("mastodonInstance", inst);
+    }
+    window.open(`https://${inst}/share?text=${enc(c.text + " " + c.url)}`, "_blank", "noopener");
+    return;
+  }
+  window.open(SHARE_URLS[net](c), "_blank", "noopener");
+}
+
+document.querySelector(".share-row").addEventListener("click", (e) => {
+  const btn = e.target.closest("[data-net]");
+  if (btn) share(btn.dataset.net);
+});
+
+// Show the native share button only where the Web Share API exists (mostly mobile).
+if (navigator.share) document.querySelector(".share-btn.native").style.display = "";
+</script>
+</body>
+</html>
