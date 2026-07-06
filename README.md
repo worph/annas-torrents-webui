@@ -1,6 +1,6 @@
 # annas-torrents-webui
 
-A web interface for [**annas-torrents**](https://github.com/cparthiv/annas-torrents) — turning the CLI-only tool for seeding [Anna's Archive](https://annas-archive.org) into a friendly dashboard you can drive from your browser.
+A web interface for [**annas-torrents**](https://github.com/cparthiv/annas-torrents) — turning the CLI-only tool for seeding [Anna's Archive](https://annas-archive.pk) into a friendly dashboard you can drive from your browser.
 
 > Anna's Archive is the largest open library in human history. It stays alive because volunteers seed its torrents. This project makes it easy to **choose how much you contribute, watch what you're actually sharing, and show it off.**
 
@@ -152,7 +152,7 @@ This app **downloads and seeds actual content**. Distributing certain materials 
 ## Credits
 
 - Built on top of [**cparthiv/annas-torrents**](https://github.com/cparthiv/annas-torrents).
-- For the benefit of [**Anna's Archive**](https://annas-archive.org) and everyone who keeps it alive.
+- For the benefit of [**Anna's Archive**](https://annas-archive.pk) and everyone who keeps it alive.
 
 ## License
 
