@@ -177,6 +177,15 @@ class QBittorrentSession:
         # Prefer v1 — Anna's Archive index keys on classic infohash.
         return (t.get("infohash_v1") or t.get("hash") or "").lower()
 
+    @staticmethod
+    def _swarm_count(t: dict, swarm_key: str, connected_key: str) -> int:
+        """Use swarm total when qBit has it; -1/missing → connected count."""
+        if swarm_key in t and t[swarm_key] is not None:
+            n = int(t[swarm_key])
+            if n >= 0:
+                return n
+        return int(t.get(connected_key, 0) or 0)
+
     def global_status(self) -> dict:
         disks = list_disks()
         try:
@@ -239,8 +248,9 @@ class QBittorrentSession:
                     "size": int(t.get("total_size", 0)),
                     "download_rate": int(t.get("dlspeed", 0)),
                     "upload_rate": int(t.get("upspeed", 0)),
-                    "num_seeds": int(t.get("num_seeds", 0)),
-                    "num_peers": int(t.get("num_leechs", 0)),
+                    # Swarm totals when known (>= 0); -1 means tracker N/A → connected counts.
+                    "num_seeds": self._swarm_count(t, "num_complete", "num_seeds"),
+                    "num_peers": self._swarm_count(t, "num_incomplete", "num_leechs"),
                     "is_seeding": state in ("uploading", "forcedUP", "stalledUP", "queuedUP", "pausedUP"),
                 }
             )

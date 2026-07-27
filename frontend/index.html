@@ -65,7 +65,12 @@
   table { width: 100%; border-collapse: collapse; margin-top: 8px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
   th { color: var(--muted); font-weight: 500; }
+  th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sortable:hover { color: var(--fg); }
+  th.sortable[data-dir="asc"]::after { content: " ↑"; color: var(--accent); }
+  th.sortable[data-dir="desc"]::after { content: " ↓"; color: var(--accent); }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th.num { text-align: right; }
   .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #0b0e12; border: 1px solid var(--line); color: var(--muted); }
   .status-msg { color: var(--muted); font-size: 13px; margin-left: 8px; }
 </style>
@@ -151,9 +156,13 @@
   <section>
     <h2>Seeding</h2>
     <table>
-      <thead><tr>
-        <th>Name</th><th>State</th><th class="num">Progress</th>
-        <th class="num">Size</th><th class="num">↑</th><th class="num">Seeds/Peers</th>
+      <thead><tr id="torrent-head">
+        <th class="sortable" data-key="name">Name</th>
+        <th class="sortable" data-key="state">State</th>
+        <th class="sortable num" data-key="progress">Progress</th>
+        <th class="sortable num" data-key="size">Size</th>
+        <th class="sortable num" data-key="upload_rate">↑</th>
+        <th class="sortable num" data-key="seeds">Seeds/Peers</th>
       </tr></thead>
       <tbody id="torrent-rows"><tr><td colspan="6" class="sub">No torrents yet.</td></tr></tbody>
     </table>
@@ -174,6 +183,42 @@ const fmtRate = (n) => fmtBytes(n) + "/s";
 let latestCoverage = null;
 const DISK_KEY = "annas_disk_path";
 let selectedDisk = localStorage.getItem(DISK_KEY) || "";
+const SORT_KEY = "annas_torrent_sort";
+let sort = JSON.parse(localStorage.getItem(SORT_KEY) || '{"key":"name","dir":"asc"}');
+
+function sortValue(t, key) {
+  if (key === "name") return (t.name || t.infohash || "").toLowerCase();
+  if (key === "state") return (t.is_seeding ? "seeding" : t.state || "").toLowerCase();
+  if (key === "seeds") return (t.num_seeds || 0) * 1e9 + (t.num_peers || 0);
+  return Number(t[key]) || 0;
+}
+
+function sortedTorrents(rows) {
+  const dir = sort.dir === "desc" ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    const va = sortValue(a, sort.key), vb = sortValue(b, sort.key);
+    if (va < vb) return -1 * dir;
+    if (va > vb) return 1 * dir;
+    return 0;
+  });
+}
+
+function paintSortHeaders() {
+  document.querySelectorAll("#torrent-head th.sortable").forEach((th) => {
+    th.dataset.dir = th.dataset.key === sort.key ? sort.dir : "";
+  });
+}
+
+$("torrent-head").addEventListener("click", (e) => {
+  const th = e.target.closest("th.sortable");
+  if (!th) return;
+  const key = th.dataset.key;
+  if (sort.key === key) sort.dir = sort.dir === "asc" ? "desc" : "asc";
+  else { sort.key = key; sort.dir = key === "name" || key === "state" ? "asc" : "desc"; }
+  localStorage.setItem(SORT_KEY, JSON.stringify(sort));
+  paintSortHeaders();
+  if (window._lastSnapshot) render(window._lastSnapshot);
+});
 
 $("disk-select").addEventListener("change", (e) => {
   selectedDisk = e.target.value;
@@ -181,6 +226,7 @@ $("disk-select").addEventListener("change", (e) => {
 });
 
 function render(s) {
+  window._lastSnapshot = s;
   const g = s.global, c = s.coverage;
   $("m-up").textContent = fmtRate(g.upload_rate);
   $("m-down").textContent = fmtRate(g.download_rate);
@@ -221,7 +267,8 @@ function render(s) {
     $("cov-detail").textContent = "loading archive index…";
   }
 
-  const rows = s.torrents;
+  paintSortHeaders();
+  const rows = sortedTorrents(s.torrents || []);
   const tbody = $("torrent-rows");
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="6" class="sub">No torrents yet.</td></tr>';
