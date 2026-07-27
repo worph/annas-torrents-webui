@@ -14,7 +14,7 @@ from pydantic import BaseModel
 
 from .metrics import CoverageIndex
 from .selection import download_torrent_files, fetch_torrent_list
-from .session import TorrentSession
+from .session import create_session
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
 log = logging.getLogger("main")
@@ -26,11 +26,26 @@ FRONTEND_DIR = os.environ.get("FRONTEND_DIR", "/app/frontend")
 # empty, the frontend falls back to the browser's own origin.
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 
-session = TorrentSession(
+# TORRENT_BACKEND=libtorrent (default) | qbittorrent
+TORRENT_BACKEND = os.environ.get("TORRENT_BACKEND", "libtorrent")
+# qBittorrent — only used when TORRENT_BACKEND=qbittorrent
+QBIT_URL = os.environ.get("QBIT_URL", "http://host.docker.internal:8080")
+QBIT_USER = os.environ.get("QBIT_USER", "admin")
+QBIT_PASS = os.environ.get("QBIT_PASS", "")
+QBIT_CATEGORY = os.environ.get("QBIT_CATEGORY", "Anna's Archive")
+QBIT_SAVE_PATH = os.environ.get("QBIT_SAVE_PATH", "")
+
+session = create_session(
     content_dir=os.path.join(DATA_DIR, "content"),
     torrents_dir=os.path.join(DATA_DIR, "torrents"),
     resume_dir=os.path.join(DATA_DIR, "resume"),
     listen_port=LISTEN_PORT,
+    backend=TORRENT_BACKEND,
+    qbit_url=QBIT_URL,
+    qbit_user=QBIT_USER,
+    qbit_pass=QBIT_PASS,
+    qbit_category=QBIT_CATEGORY,
+    qbit_save_path=QBIT_SAVE_PATH or None,
 )
 coverage_index = CoverageIndex()
 

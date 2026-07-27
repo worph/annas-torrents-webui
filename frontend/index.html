@@ -19,7 +19,8 @@
   main { max-width: 1000px; margin: 0 auto; padding: 24px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+                 display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .card .value { font-size: 24px; font-weight: 600; margin-top: 6px; }
   .card .value small { font-size: 13px; color: var(--muted); font-weight: 400; }
   section { margin-top: 28px; }
@@ -32,6 +33,9 @@
   input, button { font: inherit; }
   input[type=number] { width: 120px; background: #0b0e12; border: 1px solid var(--line);
                        color: var(--fg); border-radius: 8px; padding: 8px 10px; }
+  select.disk-select { font: inherit; font-size: 11px; background: #0b0e12; border: 1px solid var(--line);
+                       color: var(--fg); border-radius: 6px; padding: 2px 6px; margin-left: 8px;
+                       text-transform: none; letter-spacing: 0; vertical-align: middle; }
   button { cursor: pointer; border: none; border-radius: 8px; padding: 9px 16px; font-weight: 600; }
   .primary { background: var(--accent); color: #06281c; }
   button:disabled { opacity: .5; cursor: default; }
@@ -112,7 +116,12 @@
     <div class="grid">
       <div class="card"><div class="label">Upload</div><div class="value" id="m-up">–</div></div>
       <div class="card"><div class="label">Download</div><div class="value" id="m-down">–</div></div>
-      <div class="card"><div class="label">Disk committed</div><div class="value" id="m-disk">–</div></div>
+      <div class="card">
+        <div class="label"><span>Disk committed</span>
+          <select class="disk-select" id="disk-select" title="Disk for free space"></select>
+        </div>
+        <div class="value" id="m-disk">–</div>
+      </div>
       <div class="card"><div class="label">Torrents</div><div class="value" id="m-torrents">–</div></div>
       <div class="card"><div class="label">Peers / DHT</div><div class="value" id="m-peers">–</div></div>
       <div class="card"><div class="label">Total uploaded</div><div class="value" id="m-totup">–</div></div>
@@ -163,13 +172,40 @@ function fmtBytes(n) {
 const fmtRate = (n) => fmtBytes(n) + "/s";
 
 let latestCoverage = null;
+const DISK_KEY = "annas_disk_path";
+let selectedDisk = localStorage.getItem(DISK_KEY) || "";
+
+$("disk-select").addEventListener("change", (e) => {
+  selectedDisk = e.target.value;
+  localStorage.setItem(DISK_KEY, selectedDisk);
+});
 
 function render(s) {
   const g = s.global, c = s.coverage;
   $("m-up").textContent = fmtRate(g.upload_rate);
   $("m-down").textContent = fmtRate(g.download_rate);
+
+  const disks = g.disks || [];
+  const sel = $("disk-select");
+  const paths = disks.map((d) => d.path);
+  if (disks.length && (!selectedDisk || !paths.includes(selectedDisk))) {
+    selectedDisk = paths[0];
+    localStorage.setItem(DISK_KEY, selectedDisk);
+  }
+  if (sel.dataset.paths !== paths.join("|")) {
+    sel.dataset.paths = paths.join("|");
+    sel.innerHTML = disks.map((d) =>
+      `<option value="${d.path}">${d.path.replace(/\\$/, "")} (${fmtBytes(d.free)} free)</option>`
+    ).join("");
+    sel.style.display = disks.length > 1 ? "" : "none";
+  }
+  if (selectedDisk) sel.value = selectedDisk;
+  const disk = disks.find((d) => d.path === selectedDisk) || disks[0];
+  const free = disk ? disk.free : g.disk_free;
+  const label = disk ? disk.path.replace(/\\$/, "") : "";
   $("m-disk").innerHTML = fmtBytes(g.committed_bytes) +
-    ` <small>/ ${fmtBytes(g.disk_free)} free</small>`;
+    ` <small>/ ${fmtBytes(free)} free${label ? " on " + label : ""}</small>`;
+
   $("m-torrents").textContent = g.num_torrents;
   $("m-peers").innerHTML = g.num_peers + ` <small>/ ${g.dht_nodes} DHT</small>`;
   $("m-totup").textContent = fmtBytes(g.total_upload);
