@@ -33,7 +33,7 @@ class CoverageIndex:
             log.warning("coverage index refresh failed: %s", e)
             return
         self._entries = entries
-        self._by_hash = {e.btih: e for e in entries if e.btih}
+        self._by_hash = {e.btih.lower(): e for e in entries if e.btih}
         self._fetched_at = now
         log.info("coverage index: %d entries, %d bytes total", len(entries), self.total_bytes)
 
@@ -47,8 +47,11 @@ class CoverageIndex:
 
     def coverage(self, seeded_infohashes: set[str]) -> dict:
         """Coverage of the archive by the given set of seeded infohashes (hex)."""
+        # Normalize case — libtorrent may return mixed-case; index keys are lower.
         seeded_bytes = sum(
-            self._by_hash[h].data_size for h in seeded_infohashes if h in self._by_hash
+            self._by_hash[h].data_size
+            for raw in seeded_infohashes
+            if (h := (raw or "").lower()) in self._by_hash
         )
         total = self.total_bytes
         pct = (seeded_bytes / total * 100.0) if total else 0.0
@@ -58,3 +61,14 @@ class CoverageIndex:
             "percent": pct,
             "index_ready": self.ready,
         }
+
+
+if __name__ == "__main__":
+    idx = CoverageIndex()
+    fake = type("E", (), {"data_size": 42})()
+    idx._entries = [fake]
+    idx._by_hash = {"aabb": fake}
+    assert idx.coverage({"AABB"})["seeded_bytes"] == 42
+    assert idx.coverage({"aabb"})["seeded_bytes"] == 42
+    assert idx.coverage({"ffff"})["seeded_bytes"] == 0
+    print("ok: coverage case-insensitive lookup")

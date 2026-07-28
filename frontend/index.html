@@ -19,7 +19,8 @@
   main { max-width: 1000px; margin: 0 auto; padding: 24px; }
   .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 16px; }
   .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px; }
-  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em; }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: .04em;
+                 display: flex; align-items: center; justify-content: space-between; gap: 8px; }
   .card .value { font-size: 24px; font-weight: 600; margin-top: 6px; }
   .card .value small { font-size: 13px; color: var(--muted); font-weight: 400; }
   section { margin-top: 28px; }
@@ -32,6 +33,9 @@
   input, button { font: inherit; }
   input[type=number] { width: 120px; background: #0b0e12; border: 1px solid var(--line);
                        color: var(--fg); border-radius: 8px; padding: 8px 10px; }
+  select.disk-select { font: inherit; font-size: 11px; background: #0b0e12; border: 1px solid var(--line);
+                       color: var(--fg); border-radius: 6px; padding: 2px 6px; margin-left: 8px;
+                       text-transform: none; letter-spacing: 0; vertical-align: middle; }
   button { cursor: pointer; border: none; border-radius: 8px; padding: 9px 16px; font-weight: 600; }
   .primary { background: var(--accent); color: #06281c; }
   button:disabled { opacity: .5; cursor: default; }
@@ -61,7 +65,12 @@
   table { width: 100%; border-collapse: collapse; margin-top: 8px; }
   th, td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); font-size: 13px; }
   th { color: var(--muted); font-weight: 500; }
+  th.sortable { cursor: pointer; user-select: none; white-space: nowrap; }
+  th.sortable:hover { color: var(--fg); }
+  th.sortable[data-dir="asc"]::after { content: " ↑"; color: var(--accent); }
+  th.sortable[data-dir="desc"]::after { content: " ↓"; color: var(--accent); }
   td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  th.num { text-align: right; }
   .pill { font-size: 11px; padding: 2px 8px; border-radius: 999px; background: #0b0e12; border: 1px solid var(--line); color: var(--muted); }
   .status-msg { color: var(--muted); font-size: 13px; margin-left: 8px; }
 </style>
@@ -112,7 +121,12 @@
     <div class="grid">
       <div class="card"><div class="label">Upload</div><div class="value" id="m-up">–</div></div>
       <div class="card"><div class="label">Download</div><div class="value" id="m-down">–</div></div>
-      <div class="card"><div class="label">Disk committed</div><div class="value" id="m-disk">–</div></div>
+      <div class="card">
+        <div class="label"><span>Disk committed</span>
+          <select class="disk-select" id="disk-select" title="Disk for free space"></select>
+        </div>
+        <div class="value" id="m-disk">–</div>
+      </div>
       <div class="card"><div class="label">Torrents</div><div class="value" id="m-torrents">–</div></div>
       <div class="card"><div class="label">Peers / DHT</div><div class="value" id="m-peers">–</div></div>
       <div class="card"><div class="label">Total uploaded</div><div class="value" id="m-totup">–</div></div>
@@ -142,9 +156,13 @@
   <section>
     <h2>Seeding</h2>
     <table>
-      <thead><tr>
-        <th>Name</th><th>State</th><th class="num">Progress</th>
-        <th class="num">Size</th><th class="num">↑</th><th class="num">Seeds/Peers</th>
+      <thead><tr id="torrent-head">
+        <th class="sortable" data-key="name">Name</th>
+        <th class="sortable" data-key="state">State</th>
+        <th class="sortable num" data-key="progress">Progress</th>
+        <th class="sortable num" data-key="size">Size</th>
+        <th class="sortable num" data-key="upload_rate">↑</th>
+        <th class="sortable num" data-key="seeds">Seeds/Peers</th>
       </tr></thead>
       <tbody id="torrent-rows"><tr><td colspan="6" class="sub">No torrents yet.</td></tr></tbody>
     </table>
@@ -163,13 +181,77 @@ function fmtBytes(n) {
 const fmtRate = (n) => fmtBytes(n) + "/s";
 
 let latestCoverage = null;
+const DISK_KEY = "annas_disk_path";
+let selectedDisk = localStorage.getItem(DISK_KEY) || "";
+const SORT_KEY = "annas_torrent_sort";
+let sort = JSON.parse(localStorage.getItem(SORT_KEY) || '{"key":"name","dir":"asc"}');
+
+function sortValue(t, key) {
+  if (key === "name") return (t.name || t.infohash || "").toLowerCase();
+  if (key === "state") return (t.is_seeding ? "seeding" : t.state || "").toLowerCase();
+  if (key === "seeds") return (t.num_seeds || 0) * 1e9 + (t.num_peers || 0);
+  return Number(t[key]) || 0;
+}
+
+function sortedTorrents(rows) {
+  const dir = sort.dir === "desc" ? -1 : 1;
+  return [...rows].sort((a, b) => {
+    const va = sortValue(a, sort.key), vb = sortValue(b, sort.key);
+    if (va < vb) return -1 * dir;
+    if (va > vb) return 1 * dir;
+    return 0;
+  });
+}
+
+function paintSortHeaders() {
+  document.querySelectorAll("#torrent-head th.sortable").forEach((th) => {
+    th.dataset.dir = th.dataset.key === sort.key ? sort.dir : "";
+  });
+}
+
+$("torrent-head").addEventListener("click", (e) => {
+  const th = e.target.closest("th.sortable");
+  if (!th) return;
+  const key = th.dataset.key;
+  if (sort.key === key) sort.dir = sort.dir === "asc" ? "desc" : "asc";
+  else { sort.key = key; sort.dir = key === "name" || key === "state" ? "asc" : "desc"; }
+  localStorage.setItem(SORT_KEY, JSON.stringify(sort));
+  paintSortHeaders();
+  if (window._lastSnapshot) render(window._lastSnapshot);
+});
+
+$("disk-select").addEventListener("change", (e) => {
+  selectedDisk = e.target.value;
+  localStorage.setItem(DISK_KEY, selectedDisk);
+});
 
 function render(s) {
+  window._lastSnapshot = s;
   const g = s.global, c = s.coverage;
   $("m-up").textContent = fmtRate(g.upload_rate);
   $("m-down").textContent = fmtRate(g.download_rate);
+
+  const disks = g.disks || [];
+  const sel = $("disk-select");
+  const paths = disks.map((d) => d.path);
+  if (disks.length && (!selectedDisk || !paths.includes(selectedDisk))) {
+    selectedDisk = paths[0];
+    localStorage.setItem(DISK_KEY, selectedDisk);
+  }
+  if (sel.dataset.paths !== paths.join("|")) {
+    sel.dataset.paths = paths.join("|");
+    sel.innerHTML = disks.map((d) =>
+      `<option value="${d.path}">${d.path.replace(/\\$/, "")} (${fmtBytes(d.free)} free)</option>`
+    ).join("");
+    sel.style.display = disks.length > 1 ? "" : "none";
+  }
+  if (selectedDisk) sel.value = selectedDisk;
+  const disk = disks.find((d) => d.path === selectedDisk) || disks[0];
+  const free = disk ? disk.free : g.disk_free;
+  const label = disk ? disk.path.replace(/\\$/, "") : "";
   $("m-disk").innerHTML = fmtBytes(g.committed_bytes) +
-    ` <small>/ ${fmtBytes(g.disk_free)} free</small>`;
+    ` <small>/ ${fmtBytes(free)} free${label ? " on " + label : ""}</small>`;
+
   $("m-torrents").textContent = g.num_torrents;
   $("m-peers").innerHTML = g.num_peers + ` <small>/ ${g.dht_nodes} DHT</small>`;
   $("m-totup").textContent = fmtBytes(g.total_upload);
@@ -185,7 +267,8 @@ function render(s) {
     $("cov-detail").textContent = "loading archive index…";
   }
 
-  const rows = s.torrents;
+  paintSortHeaders();
+  const rows = sortedTorrents(s.torrents || []);
   const tbody = $("torrent-rows");
   if (!rows.length) {
     tbody.innerHTML = '<tr><td colspan="6" class="sub">No torrents yet.</td></tr>';
