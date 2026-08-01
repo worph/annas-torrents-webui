@@ -4,6 +4,8 @@ A web interface for [**annas-torrents**](https://github.com/cparthiv/annas-torre
 
 > Anna's Archive is the largest open library in human history. It stays alive because volunteers seed its torrents. This project makes it easy to **choose how much you contribute, watch what you're actually sharing, and show it off.**
 
+![Anna's Torrents Seedbox dashboard — contribution target, archive coverage, and live upload/download/disk/peer metrics](doc/screenshot1.png)
+
 ---
 
 ## Why a Web UI?
