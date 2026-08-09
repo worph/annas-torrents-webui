@@ -48,7 +48,7 @@ test("security headers present on HTML", async ({ request }) => {
   expect(r.headers()["x-frame-options"] || "").toMatch(/DENY/i);
 });
 
-test("SSE ticket is one-shot then reconnect path works", async ({ request }) => {
+test("SSE ticket is one-shot then reconnect path works", async ({ request, baseURL }) => {
   const issued = await request.get("/api/events/ticket", {
     headers: { "X-API-Token": TOKEN },
   });
@@ -56,11 +56,27 @@ test("SSE ticket is one-shot then reconnect path works", async ({ request }) => 
   const { ticket } = await issued.json();
   expect(ticket).toBeTruthy();
 
-  const first = await request.get(`/api/events?ticket=${encodeURIComponent(ticket)}`);
-  // StreamingResponse may stay open — cancel after headers prove auth accepted.
-  expect(first.status()).toBe(200);
-  await first.body().cancel().catch(() => {});
+  // /api/events is an endless stream — Playwright's request.get waits for the body
+  // and hangs until the test timeout. Consume the ticket with fetch, then abort.
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), 5_000);
+  let status = 0;
+  try {
+    const res = await fetch(
+      `${baseURL}/api/events?ticket=${encodeURIComponent(ticket)}`,
+      { signal: ac.signal }
+    );
+    status = res.status;
+    ac.abort(); // drop the open SSE connection
+  } catch (err) {
+    // Abort after 200 is expected; surface other failures.
+    if (status === 0) throw err;
+  } finally {
+    clearTimeout(timer);
+  }
+  expect(status).toBe(200);
 
+  // Spent ticket → finite 401 JSON (safe for request.get).
   const reuse = await request.get(`/api/events?ticket=${encodeURIComponent(ticket)}`);
   expect(reuse.status()).toBe(401);
 

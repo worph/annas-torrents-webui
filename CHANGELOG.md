@@ -11,7 +11,7 @@ version tags — **pin a semver tag** for production, not `latest`.
 ### Bug fixes (deep hunt)
 - Libtorrent empty `remove_torrents` no longer claims `files_deleted: true`.
 - Frontend: Settings/reconnect no longer leaves provision button stuck (`provisionInFlight`); space free / remove modal recover from interrupted requests.
-- CI: container smoke with required `API_TOKEN`; Playwright checks SSE ticket one-shot.
+- CI: container smoke with required `API_TOKEN`; Playwright checks SSE ticket one-shot (without hanging on the event stream).
 
 ### Security / trust
 - Public `/view` snapshot no longer includes host disk capacity fields.
