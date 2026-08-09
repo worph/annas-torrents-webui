@@ -17,6 +17,9 @@ on:
       - main
     tags:
       - "v*.*.*"
+  pull_request:
+    branches:
+      - main
   workflow_dispatch:
 
 env:
@@ -24,7 +27,91 @@ env:
   IMAGE_NAME: ${{ github.repository_owner }}/annas-torrents-webui
 
 jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install system Python + libtorrent
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends python3 python3-pip python3-libtorrent
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Install Python deps
+        run: python3 -m pip install --break-system-packages -r backend/requirements.txt
+      - name: Unit tests
+        env:
+          DATA_DIR: ${{ runner.temp }}/annas-data
+          TORRENT_PORT: "0"
+          ALLOW_UNAUTHENTICATED_API: "1"
+        run: python3 -m unittest discover -s tests -v
+      - name: Module self-checks
+        working-directory: backend
+        env:
+          DATA_DIR: ${{ runner.temp }}/annas-data
+          TORRENT_PORT: "0"
+          ALLOW_UNAUTHENTICATED_API: "1"
+        run: |
+          python3 -m app.space
+          python3 -m app.settings
+          python3 -m app.storage
+          python3 -m app.metrics
+          python3 -m app.pathsafety
+      - name: Required delivery files are tracked
+        run: |
+          git ls-files --error-unmatch \
+            docker-entrypoint.sh \
+            docker-compose.libtorrent.yml \
+            .gitattributes \
+            backend/app/auth.py \
+            backend/app/pathsafety.py \
+            backend/app/settings.py \
+            backend/app/space.py \
+            backend/app/storage.py \
+            backend/app/ux.py \
+            tests/test_regressions.py
+          test -f docker-entrypoint.sh
+          ! grep -U $'\r' docker-entrypoint.sh
+      - name: Compose config validates
+        run: |
+          docker compose -f docker-compose.yml config --quiet
+          TORRENT_PORT=12345 docker compose -f docker-compose.yml -f docker-compose.libtorrent.yml config --quiet
+          # Overlay requires a positive host/container port; TORRENT_PORT=0 is for app-only CI.
+          docker compose -f docker-compose.yml config --quiet
+      - name: Docker build smoke test
+        run: |
+          docker build --tag annas-torrents-webui:ci .
+          docker build --build-arg TORRENT_BACKEND=qbittorrent --tag annas-torrents-webui:ci-qbit .
+      - name: Container import smoke
+        run: |
+          docker run --rm -e ALLOW_UNAUTHENTICATED_API=1 -e TORRENT_PORT=0 annas-torrents-webui:ci \
+            python3 -c "import app.main; print('libtorrent-ok')"
+          docker run --rm -e ALLOW_UNAUTHENTICATED_API=1 -e TORRENT_PORT=0 -e TORRENT_BACKEND=qbittorrent \
+            annas-torrents-webui:ci-qbit \
+            python3 -c "import app.main; print('qbit-ok')"
+      - name: Container health smoke
+        run: |
+          cid=$(docker run -d -e ALLOW_UNAUTHENTICATED_API=1 -e TORRENT_PORT=0 -p 18080:8080 annas-torrents-webui:ci)
+          cleanup() { docker rm -f "$cid" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18080/api/healthz >/dev/null \
+              && curl -fsS http://127.0.0.1:18080/api/health >/dev/null; then
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ok" = "1"
+          docker inspect --format='{{.Config.Healthcheck.Test}}' "$cid" | grep -q healthz
+
+
   build-and-push:
+    if: github.event_name != 'pull_request'
+    needs: test
     runs-on: ubuntu-latest
     permissions:
       contents: read
@@ -58,6 +145,7 @@ jobs:
             type=ref,event=branch
             type=sha,format=short
             type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=latest,enable=${{ startsWith(github.ref, 'refs/tags/v') }}
 
       - name: Build and push
         uses: docker/build-push-action@v6

@@ -1,0 +1,5 @@
+services:
+  annas-torrents-webui:
+    ports:
+      - "${TORRENT_PORT:-6881}:${TORRENT_PORT:-6881}/tcp"
+      - "${TORRENT_PORT:-6881}:${TORRENT_PORT:-6881}/udp"

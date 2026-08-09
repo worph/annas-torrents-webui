@@ -1,6 +1,9 @@
 data/
+.cursor/
 __pycache__/
 *.pyc
 .venv/
+.env
+.env.*
 
 docker-compose.override.yml

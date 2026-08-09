@@ -1,26 +1,41 @@
 services:
   annas-torrents-webui:
-    build: .
+    build:
+      context: .
+      args:
+        TORRENT_BACKEND: ${TORRENT_BACKEND:-libtorrent}
     container_name: annas-torrents-webui
     ports:
-      - "${WEB_PORT:-8080}:8080"
-      # Only needed for TORRENT_BACKEND=libtorrent (embedded peer traffic)
-      - "6881:6881/tcp"
-      - "6881:6881/udp"
+      # Default 8090 avoids clashing with qBittorrent's common host port 8080
+      # (QBIT_URL=http://host.docker.internal:8080). Override with WEB_PORT.
+      - "127.0.0.1:${WEB_PORT:-8090}:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
     environment:
-      - DATA_DIR=/data
-      - TORRENT_PORT=6881
+      - DATA_DIR=${DATA_DIR:-/data}
+      - TORRENT_PORT=${TORRENT_PORT:-6881}
       # libtorrent (default) | qbittorrent
       - TORRENT_BACKEND=${TORRENT_BACKEND:-libtorrent}
-      # Used when TORRENT_BACKEND=qbittorrent
+      # Used when TORRENT_BACKEND=qbittorrent (qBit Web UI is usually host :8080)
       - QBIT_URL=${QBIT_URL:-http://host.docker.internal:8080}
       - QBIT_USER=${QBIT_USER:-admin}
       - QBIT_PASS=${QBIT_PASS:-}
-      - QBIT_CATEGORY=${QBIT_CATEGORY:-Anna's Archive}
+      - QBIT_CATEGORY=${QBIT_CATEGORY:-Anna's Archive Torrents}
       - QBIT_SAVE_PATH=${QBIT_SAVE_PATH:-}
+      # Extra allowlisted download destinations (comma-separated). For libtorrent,
+      # each path must also be mounted below. For qBittorrent, paths are as qBit sees them.
+      - STORAGE_PATHS=${STORAGE_PATHS:-}
       - PUBLIC_URL=${PUBLIC_URL:-}
+      - API_TOKEN=${API_TOKEN:-}
+      # Development-only escape hatch; leave empty for authenticated APIs.
+      - ALLOW_UNAUTHENTICATED_API=${ALLOW_UNAUTHENTICATED_API:-}
+      # Set CONTENT_CHOWN=0 to skip recursive chown of large content binds.
+      - CONTENT_CHOWN=${CONTENT_CHOWN:-1}
     volumes:
-      - ./data:/data
+      # App state: .torrent files (+ content/resume for libtorrent).
+      # Host path and container path must stay aligned — override both together
+      # (HOST_DATA_DIR + DATA_DIR) if you move state off /data.
+      - ${HOST_DATA_DIR:-./data}:${DATA_DIR:-/data}
+      # Example second libtorrent destination (uncomment and set STORAGE_PATHS=/data/content,/extra):
+      # - /mnt/bigdisk:/extra
     restart: unless-stopped
