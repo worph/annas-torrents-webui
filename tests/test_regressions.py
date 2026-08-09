@@ -21,6 +21,27 @@ from app.settings import apply_patch, save_settings  # noqa: E402
 from app.metrics import CoverageIndex, _safe_progress  # noqa: E402
 from app.space import pick_combination  # noqa: E402
 from app.storage import matches_destination  # noqa: E402
+from frontend_src import frontend_bundle, frontend_js  # noqa: E402
+
+
+def _app_src(*relpaths: str) -> str:
+    """Read backend/app source (all .py if no paths; else slash-paths under app/)."""
+    root = os.path.join(os.path.dirname(__file__), "..", "backend", "app")
+    if not relpaths:
+        chunks = []
+        for dirpath, _, files in os.walk(root):
+            for name in sorted(files):
+                if name.endswith(".py"):
+                    with open(os.path.join(dirpath, name), encoding="utf-8") as f:
+                        chunks.append(f.read())
+        return "\n".join(chunks)
+    out = []
+    for rel in relpaths:
+        with open(os.path.join(root, *rel.split("/")), encoding="utf-8") as f:
+            out.append(f.read())
+    return "\n".join(out)
+
+
 
 
 class RegressionTests(unittest.TestCase):
@@ -49,30 +70,26 @@ class RegressionTests(unittest.TestCase):
     def test_frontend_script_parses_and_ids_are_unique(self):
         root = os.path.join(os.path.dirname(__file__), "..")
         html_path = os.path.join(root, "frontend", "index.html")
+        js_path = os.path.join(root, "frontend", "app.js")
         with open(html_path, encoding="utf-8") as source:
             html = source.read()
+        with open(js_path, encoding="utf-8") as source:
+            js = source.read()
         ids = re.findall(r'\bid="([^"]+)"', html)
         self.assertEqual(len(ids), len(set(ids)))
         self.assertNotIn("share-preview", ids)
-        self.assertNotIn('ensureSaveOption(prev, "Custom', html)
-        self.assertNotIn("detail.innerHTML", html)
+        self.assertNotIn('ensureSaveOption(prev, "Custom', js)
+        self.assertNotIn("detail.innerHTML", js)
         self.assertIn('id="preallocate"', html)
         self.assertIn("preallocate", html)
-        scripts = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", html, re.DOTALL)
-        self.assertTrue(scripts)
-        with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as f:
-            f.write("\n".join(scripts))
-            script_path = f.name
-        try:
-            checked = subprocess.run(
-                ["node", "--check", script_path],
-                capture_output=True,
-                text=True,
-                timeout=30,
-            )
-            self.assertEqual(checked.returncode, 0, checked.stderr)
-        finally:
-            os.unlink(script_path)
+        self.assertIn('src="/app.js"', html)
+        checked = subprocess.run(
+            ["node", "--check", js_path],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        self.assertEqual(checked.returncode, 0, checked.stderr)
 
     def test_incomplete_space_uses_downloaded_bytes(self):
         result = pick_combination(
@@ -131,6 +148,7 @@ class RegressionTests(unittest.TestCase):
                         "size": 4,
                     }
                 ],
+                "controls": {"seeding_paused": True, "upload_limit": 42},
             }
         )
         encoded = json.dumps(public)
@@ -139,7 +157,13 @@ class RegressionTests(unittest.TestCase):
         self.assertNotIn("internal", encoded)
         self.assertNotIn("book", encoded)
         self.assertEqual(public["torrents"], [])
-        self.assertIn("disk_free_known", public["global"])
+        # Host capacity must not appear on /view (fingerprint).
+        self.assertNotIn("disk_free", public["global"])
+        self.assertNotIn("disk_total", public["global"])
+        self.assertNotIn("disk_free_known", public["global"])
+        self.assertIn("committed_bytes", public["global"])
+        self.assertTrue(public["controls"]["seeding_paused"])
+        self.assertEqual(public["controls"]["upload_limit"], 42)
 
     def test_allowed_destination_rejects_parent_of_allowlisted_child(self):
         from fastapi import HTTPException
@@ -220,45 +244,38 @@ class RegressionTests(unittest.TestCase):
         self.assertIn('ENTRYPOINT ["/entrypoint.sh"]', text)
 
     def test_space_preview_uses_same_destination_allowlist(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         self.assertIn("def _allowed_destination(", text)
-        self.assertIn("save_path = _allowed_destination(", text)
+        self.assertIn("save_path = rt._allowed_destination(", text)
         self.assertIn("path = _allowed_destination(requested, allowed)", text)
 
     def test_status_binds_snapshot_and_controls_to_one_session(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         self.assertIn("def _clear_snapshot_cache()", text)
         self.assertIn("_clear_snapshot_cache()", text)
         start = text.index("async def status():")
-        end = text.index("@app.get(\"/api/public/status\")", start)
+        end = text.index("@router.get(\"/api/public/status\")", start)
         body = text[start:end]
-        self.assertIn("async with _session_lock:", body)
-        self.assertIn("sess = session", body)
+        self.assertIn("async with rt._session_lock:", body)
+        self.assertIn("sess = rt.session", body)
         self.assertIn("sess.controls_state", body)
-        self.assertIn("_session_generation != gen", body)
+        self.assertIn("rt._session_generation != gen", body)
+        self.assertNotIn('await rt._call_session("controls_state")', body)
         self.assertNotIn('await _call_session("controls_state")', body)
 
     def test_space_preview_token_cleanup_holds_space_lock(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         start = text.index("async def space_preview(")
         end = text.index("async def space_free(", start)
         body = text[start:end]
         cleanup = body.index("Drop expired tokens")
-        lock = body.index("async with _space_lock:", 0)
+        lock = body.index("async with rt._space_lock:", 0)
         self.assertLess(lock, cleanup)
-        self.assertIn("_space_tokens.pop(k, None)", body[lock:])
+        self.assertIn("rt._space_tokens.pop(k, None)", body[lock:])
 
     def test_missing_api_token_warn_uses_auth_flags(self):
         """Warn when token missing and allow-unauth off — via auth helpers, not a re-parsed `not x in`."""
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         self.assertIn("if not auth_configured() and not ALLOW_UNAUTHENTICATED_API:", text)
         self.assertNotIn(').strip().lower() in {"1", "true", "yes"}', text)
         # Document real Python precedence: `not x in s` == `not (x in s)`, not `(not x) in s`.
@@ -297,11 +314,9 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(one[2])
 
     def test_public_config_exposes_backend(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         start = text.index("async def public_config():")
-        end = text.index("@app.get(\"/api/events/ticket\")", start)
+        end = text.index("@router.get(\"/api/events/ticket\")", start)
         body = text[start:end]
         self.assertIn('"backend"', body)
 
@@ -316,13 +331,11 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(cleaned["qbit_url"], "http://127.0.0.1:8080")
 
     def test_space_free_fingerprint_under_session_lock(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         start = text.index("async def space_free(")
         end = text.index("async def torrents_remove(", start)
         body = text[start:end]
-        lock = body.index("async with _session_lock:")
+        lock = body.index("async with rt._session_lock:")
         fp = body.index("fingerprint")
         self.assertLess(lock, fp)
 
@@ -411,9 +424,7 @@ class RegressionTests(unittest.TestCase):
         self.assertNotIn(":6881", text)
 
     def test_provision_target_uses_decimal_tb(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         self.assertIn("req.max_tb * 1000**4", text)
         self.assertNotIn("req.max_tb * 1000**3", text)
 
@@ -435,9 +446,7 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("free_space_on_disk", body)
 
     def test_available_free_skips_local_disk_for_qbit(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         start = text.index("async def _available_free")
         end = text.index("async def _run_provision", start)
         body = text[start:end]
@@ -456,11 +465,9 @@ class RegressionTests(unittest.TestCase):
         self.assertIn('"allocated_bytes"', body)
 
     def test_space_confirm_honest_when_remove_fails(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "frontend", "index.html"), encoding="utf-8") as f:
-            text = f.read()
+        text = frontend_js()
         start = text.index('$("space-confirm-btn").addEventListener')
-        end = text.index("$(\"space-gb\")", start)
+        end = text.index('$("space-gb")', start)
         body = text[start:end]
         self.assertIn("Number(data.removed)", body)
         self.assertNotIn("data.removed || hashes.length", body)
@@ -543,11 +550,9 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("purge_torrent_files", body)
 
     def test_provision_skips_already_active_hash(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         start = text.index("async def _run_provision")
-        end = text.index("@asynccontextmanager", start)
+        end = text.index("def _provision_task_done", start)
         body = text[start:end]
         self.assertIn("if stem in known:", body)
         self.assertIn("do not count toward the new target", body)
@@ -592,9 +597,7 @@ class RegressionTests(unittest.TestCase):
         self.assertTrue(path_is_within("/data/content/file", "/data/content"))
 
     def test_auth_failure_bumps_storage_request_id(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "frontend", "index.html"), encoding="utf-8") as f:
-            text = f.read()
+        text = frontend_js()
         start = text.index("function authFailure()")
         end = text.index("function apiFetch(", start)
         body = text[start:end]
@@ -602,18 +605,14 @@ class RegressionTests(unittest.TestCase):
         self.assertIn('qbit_url: ""', body)
 
     def test_private_events_capped(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         self.assertIn("_PRIVATE_SSE_MAX", text)
         start = text.index("async def events()")
         end = text.index("async def public_events(", start)
         self.assertIn("too many event connections", text[start:end])
 
     def test_qbit_resolve_save_path_never_mkdir(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         start = text.index("def _resolve_save_path(")
         end = text.index("def _json_safe(", start)
         body = text[start:end]
@@ -622,26 +621,22 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("never mkdir", body.lower())
 
     def test_snapshot_cache_written_under_session_lock(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         start = text.index("async def _snapshot_loop()")
         end = text.index("async def _background_loop()", start)
         body = text[start:end]
         # Publish only after a generation check under the asyncio lock.
-        self.assertIn('_session_generation == gen', body)
+        self.assertIn("_session_generation == gen", body)
         write = body.index('_snapshot_cache["data"] = snap')
         lock = body.rfind("async with _session_lock:", 0, write)
         self.assertGreaterEqual(lock, 0)
         self.assertLess(lock, write)
 
     def test_public_events_caps_connections(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         self.assertIn("_PUBLIC_SSE_MAX", text)
         start = text.index("async def public_events(")
-        end = text.index("# ---- static frontend", start)
+        end = len(text)
         body = text[start:end]
         self.assertIn("too many public event connections", body)
         self.assertIn("_PUBLIC_SSE_PER_IP", body)
@@ -669,20 +664,14 @@ class RegressionTests(unittest.TestCase):
         self.assertFalse(sum_unique_disk_usage(["/annas_webui_missing_mount_xyz"])[2])
 
     def test_space_confirm_no_bare_requestId(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "frontend", "index.html"), encoding="utf-8") as f:
-            text = f.read()
+        text = frontend_js()
         start = text.index('$("space-confirm-btn").addEventListener')
-        end = text.index("$(\"settings-open\")", start) if "$(\"settings-open\")" in text[start:] else start + 2500
-        # Fall back: next listener after space confirm
         end = text.index("settings-save", start)
         body = text[start:end]
         self.assertNotIn("requestId === spaceRequestId", body)
 
     def test_token_recovery_allows_auth_blocked(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "frontend", "index.html"), encoding="utf-8") as f:
-            text = f.read()
+        text = frontend_js()
         start = text.index('$("settings-save").addEventListener')
         end = text.index("btn.disabled = true", start)
         body = text[start:end]
@@ -770,19 +759,15 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("except (ValueError, TypeError, OverflowError):", text)
 
     def test_provision_cancel_endpoint_exists(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         self.assertIn('"/api/provision/cancel"', text)
-        with open(os.path.join(root, "frontend", "index.html"), encoding="utf-8") as f:
-            html = f.read()
-        self.assertIn("/api/provision/cancel", html)
+        js = frontend_js()
+        html = frontend_bundle()
+        self.assertIn("/api/provision/cancel", js)
         self.assertIn("Cancel contribution", html)
 
     def test_space_token_cap_and_remove_reports_removed_count(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         self.assertIn("_SPACE_TOKEN_MAX", text)
         self.assertIn('status_code=409', text)
         self.assertIn("removal incomplete", text)
@@ -804,6 +789,9 @@ class RegressionTests(unittest.TestCase):
         body = text[start : start + 3500]
         self.assertIn("shared_content_ids", body)
         self.assertIn('"files_deleted": False', body)
+        empty = body.split("if not hashes:")[1].split("want = set")[0]
+        self.assertIn('"files_deleted": None', empty)
+        self.assertNotIn("True", empty)
 
     def test_pathsafety_checks_ancestor_reparse(self):
         root = os.path.join(os.path.dirname(__file__), "..")
@@ -813,9 +801,7 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("_reparse_on_ancestors(save_path)", text)
 
     def test_config_defaults_scrub_qbit_url(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         start = text.index("async def config():")
         end = text.index("async def put_settings", start)
         body = text[start:end]
@@ -823,40 +809,37 @@ class RegressionTests(unittest.TestCase):
         self.assertNotIn("QBIT_URL_ENV or", body)
 
     def test_public_events_per_ip_cap(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src("routes/status.py")
         self.assertIn("_PUBLIC_SSE_PER_IP_MAX", text)
         self.assertIn("from this client", text)
+        self.assertIn("TRUST_PROXY_HEADERS", text)
+        self.assertIn("x-forwarded-for", text.lower())
+
+    def test_provision_unknown_disk_requires_opt_in(self):
+        text = _app_src("routes/provision.py", "schemas.py")
+        self.assertIn("allow_unknown_disk", text)
+        self.assertIn('"code": "unknown_disk"', text)
+        self.assertIn("if free is None and not req.allow_unknown_disk", text)
 
     def test_cancel_keeps_in_flight_add_metadata(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src()
         self.assertIn("Worker may have finished the add after cancel", text)
 
     def test_ensure_save_option_clears_space_preview(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "frontend", "index.html"), encoding="utf-8") as f:
-            html = f.read()
+        html = frontend_bundle()
         start = html.index("function ensureSaveOption")
         end = html.index("function loadStorageOptions", start)
         self.assertIn("clearSpacePreview()", html[start:end])
 
     def test_settings_save_keeps_live_backend_unless_patched(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "backend", "app", "main.py"), encoding="utf-8") as f:
-            text = f.read()
+        text = _app_src("routes/settings_routes.py")
         start = text.index("async def put_settings")
-        end = text.index("async def status()", start)
-        body = text[start:end]
+        body = text[start:]
         self.assertIn('if "torrent_backend" in patch:', body)
         self.assertIn("new_backend = current_backend", body)
 
     def test_share_gate_requires_indexed_coverage(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "frontend", "index.html"), encoding="utf-8") as f:
-            html = f.read()
+        html = frontend_bundle()
         start = html.index("function hasVerifiedContribution")
         end = html.index("function updateShareGate", start)
         body = html[start:end]
@@ -886,16 +869,12 @@ class RegressionTests(unittest.TestCase):
         self.assertEqual(got["seeded_bytes"], 0)
 
     def test_storage_select_prefers_active_path(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "frontend", "index.html"), encoding="utf-8") as f:
-            html = f.read()
+        html = frontend_bundle()
         self.assertIn("data.active", html)
         self.assertIn('o.path === activePath', html)
 
     def test_space_confirm_invalidates_preview_on_conflict(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "frontend", "index.html"), encoding="utf-8") as f:
-            html = f.read()
+        html = frontend_bundle()
         self.assertIn("r.status === 400 || r.status === 409", html)
         self.assertIn("clearSpacePreview()", html)
 
@@ -907,9 +886,7 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("CONTENT_CHOWN", text)
 
     def test_auth_failure_bumps_connect_generation(self):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "frontend", "index.html"), encoding="utf-8") as f:
-            html = f.read()
+        html = frontend_bundle()
         start = html.index("function authFailure()")
         end = html.index("function fetchWithTimeout", start)
         self.assertIn("invalidateConnection()", html[start:end])

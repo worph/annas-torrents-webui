@@ -65,7 +65,7 @@ class ApiContractTests(unittest.TestCase):
         from app.main import app
 
         client = TestClient(app)
-        with mock.patch("app.main.fetch_torrent_list", side_effect=RuntimeError("mirrors down")):
+        with mock.patch("app.routes.provision.fetch_torrent_list", side_effect=RuntimeError("mirrors down")):
             r = client.get("/api/collections")
         self.assertEqual(r.status_code, 502)
 

@@ -5,5 +5,11 @@ __pycache__/
 .venv/
 .env
 .env.*
+!.env.example
+node_modules/
+.playwright-data/
+.testdata*/
+test-results/
+playwright-report/
 
 docker-compose.override.yml

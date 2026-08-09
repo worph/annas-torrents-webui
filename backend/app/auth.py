@@ -113,10 +113,14 @@ class ApiTokenMiddleware(BaseHTTPMiddleware):
 
 
 def redact_snapshot(snap: dict) -> dict:
-    """Strip hashes, paths, and torrent names from a live snapshot.
+    """Public /view snapshot: contribution + activity only — no host capacity.
 
-    Pause/limit aggregates remain so /view can show whether the seedbox is
-    actively transferring without exposing private controls UI.
+    Keeps rates, lifetime totals, torrent/peer counts, and archive coverage so
+    sharing still shows impact. Drops disk_free / disk_total / disk_free_known
+    so volunteer boxes are harder to fingerprint by free capacity.
+
+    Pause/limit aggregates are included so /view can show whether the seedbox
+    is paused without exposing private control chrome or paths.
     """
     g = snap.get("global") or {}
     raw_coverage = snap.get("coverage") or {}
@@ -125,6 +129,7 @@ def redact_snapshot(snap: dict) -> dict:
         for key in ("seeded_bytes", "total_bytes", "percent", "index_ready")
         if key in raw_coverage
     }
+    ctrl = snap.get("controls") or {}
     return {
         "connection": snap.get("connection"),
         "coverage": coverage,
@@ -134,9 +139,6 @@ def redact_snapshot(snap: dict) -> dict:
             "total_upload": g.get("total_upload", 0),
             "total_download": g.get("total_download", 0),
             "committed_bytes": g.get("committed_bytes", 0),
-            "disk_free": g.get("disk_free", 0),
-            "disk_free_known": g.get("disk_free_known", False),
-            "disk_total": g.get("disk_total", 0),
             "num_torrents": g.get("num_torrents", 0),
             "num_peers": g.get("num_peers", 0),
             "backend_ok": g.get("backend_ok", True),
@@ -145,10 +147,33 @@ def redact_snapshot(snap: dict) -> dict:
         "torrents": [],
         "provision": {"running": False, "phase": "idle", "message": "idle"},
         "controls": {
-            "seeding_paused": False,
-            "downloads_paused": False,
-            "upload_limit": -1,
-            "download_limit": -1,
+            "seeding_paused": bool(ctrl.get("seeding_paused", False)),
+            "downloads_paused": bool(ctrl.get("downloads_paused", False)),
+            "upload_limit": int(ctrl.get("upload_limit", -1)),
+            "download_limit": int(ctrl.get("download_limit", -1)),
         },
         "public": True,
     }
+
+
+class SecurityHeadersMiddleware(BaseHTTPMiddleware):
+    """Browser hardening for the control-plane UI (CSP + clickjacking)."""
+
+    async def dispatch(self, request: Request, call_next: Callable):
+        response = await call_next(request)
+        response.headers.setdefault("X-Content-Type-Options", "nosniff")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        response.headers.setdefault("Referrer-Policy", "no-referrer")
+        # localStorage token + inline-free static JS/CSS; allow SSE/fetch same-origin.
+        response.headers.setdefault(
+            "Content-Security-Policy",
+            "default-src 'self'; "
+            "script-src 'self'; "
+            "style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; "
+            "connect-src 'self'; "
+            "frame-ancestors 'none'; "
+            "base-uri 'self'; "
+            "form-action 'self'",
+        )
+        return response

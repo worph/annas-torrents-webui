@@ -1,0 +1,53 @@
+name: Bug report
+description: Something does not work as documented
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For **security** issues, do not use this form — see SECURITY.md.
+  - type: dropdown
+    id: backend
+    attributes:
+      label: Torrent backend
+      options:
+        - libtorrent
+        - qbittorrent
+        - unknown
+    validations:
+      required: true
+  - type: dropdown
+    id: how_run
+    attributes:
+      label: How are you running it?
+      options:
+        - Docker Compose (Linux)
+        - Docker Desktop (Windows)
+        - Docker Desktop (macOS)
+        - Native Python
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version / image tag
+      placeholder: "e.g. ghcr.io/worph/annas-torrents-webui:1.2.3 or git SHA"
+  - type: textarea
+    id: what
+    attributes:
+      label: What happened?
+      description: Expected vs actual.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Steps to reproduce
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / screenshots
+      description: Redact API tokens and paths you care about. `docker logs annas-torrents-webui` helps.

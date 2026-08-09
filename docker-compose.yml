@@ -4,10 +4,14 @@ services:
       context: .
       args:
         TORRENT_BACKEND: ${TORRENT_BACKEND:-libtorrent}
+    # Prefer a pinned GHCR tag in production, e.g.:
+    # image: ghcr.io/worph/annas-torrents-webui:1.x.x
     container_name: annas-torrents-webui
     ports:
+      # Web UI only — localhost by default. This is NOT the BitTorrent listen port.
       # Default 8090 avoids clashing with qBittorrent's common host port 8080
       # (QBIT_URL=http://host.docker.internal:8080). Override with WEB_PORT.
+      # Do not change 127.0.0.1 to 0.0.0.0 unless you intend to expose the control plane.
       - "127.0.0.1:${WEB_PORT:-8090}:8080"
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -29,6 +33,7 @@ services:
       - API_TOKEN=${API_TOKEN:-}
       # Development-only escape hatch; leave empty for authenticated APIs.
       - ALLOW_UNAUTHENTICATED_API=${ALLOW_UNAUTHENTICATED_API:-}
+      - TRUST_PROXY_HEADERS=${TRUST_PROXY_HEADERS:-}
       # Set CONTENT_CHOWN=0 to skip recursive chown of large content binds.
       - CONTENT_CHOWN=${CONTENT_CHOWN:-1}
     volumes:

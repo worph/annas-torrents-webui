@@ -1,0 +1,12 @@
+{
+  "name": "annas-torrents-webui",
+  "private": true,
+  "scripts": {
+    "test:logic": "node --test tests/frontend/*.mjs",
+    "test:e2e": "playwright test",
+    "test:frontend": "npm run test:logic && npm run test:e2e"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.0"
+  }
+}

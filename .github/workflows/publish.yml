@@ -47,6 +47,16 @@ jobs:
           TORRENT_PORT: "0"
           ALLOW_UNAUTHENTICATED_API: "1"
         run: python3 -m unittest discover -s tests -v
+      - name: Frontend logic tests
+        run: node --test tests/frontend/*.mjs
+      - name: Playwright smoke (API_TOKEN required)
+        env:
+          E2E_API_TOKEN: e2e-ci-token
+        run: |
+          python3 -m pip install --break-system-packages uvicorn
+          npm ci
+          npx playwright install --with-deps chromium
+          npx playwright test
       - name: Module self-checks
         working-directory: backend
         env:
@@ -59,9 +69,19 @@ jobs:
           python3 -m app.storage
           python3 -m app.metrics
           python3 -m app.pathsafety
+      - name: actionlint
+        run: |
+          bash <(curl -fsSL https://raw.githubusercontent.com/rhysd/actionlint/v1.7.7/scripts/download-actionlint.bash) 1.7.7
+          ./actionlint -color
       - name: Required delivery files are tracked
         run: |
           git ls-files --error-unmatch \
+            package-lock.json \
+            CHANGELOG.md \
+            CONTRIBUTING.md \
+            SECURITY.md \
+            CODE_OF_CONDUCT.md \
+            .env.example \
             docker-entrypoint.sh \
             docker-compose.libtorrent.yml \
             .gitattributes \
@@ -73,7 +93,15 @@ jobs:
             backend/app/ux.py \
             tests/test_regressions.py \
             tests/test_roadmap_fixes.py \
-            tests/test_bug_hunt.py
+            tests/test_bug_hunt.py \
+            tests/test_fortress.py \
+            tests/test_deep_hunt.py \
+            frontend/app.js \
+            frontend/app.css \
+            frontend/logic.mjs \
+            backend/app/runtime.py \
+            backend/app/schemas.py \
+            backend/app/routes/health.py
           test -f docker-entrypoint.sh
           ! grep -U $'\r' docker-entrypoint.sh
       - name: Compose config validates
@@ -108,6 +136,26 @@ jobs:
           done
           test "$ok" = "1"
           docker inspect --format='{{.Config.Healthcheck.Test}}' "$cid" | grep -q healthz
+      - name: Container auth smoke (API_TOKEN required)
+        run: |
+          # HEALTHCHECK uses healthz (stays green without a token); readiness must still gate.
+          cid=$(docker run -d -e API_TOKEN=ci-deep-hunt-token -e TORRENT_PORT=0 -p 18081:8080 annas-torrents-webui:ci)
+          cleanup() { docker rm -f "$cid" >/dev/null 2>&1 || true; }
+          trap cleanup EXIT
+          ok=0
+          for i in $(seq 1 60); do
+            if curl -fsS http://127.0.0.1:18081/api/healthz >/dev/null; then
+              code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/api/health)
+              # readiness is auth-gated — without token expect 401
+              test "$code" = "401" || continue
+              code_ok=$(curl -s -o /dev/null -w '%{http_code}' -H "X-API-Token: ci-deep-hunt-token" http://127.0.0.1:18081/api/health)
+              test "$code_ok" = "200" || continue
+              ok=1
+              break
+            fi
+            sleep 2
+          done
+          test "$ok" = "1"
 
 
   build-and-push:

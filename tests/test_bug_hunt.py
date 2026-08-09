@@ -144,7 +144,10 @@ class ContractTests(unittest.TestCase):
             raw = f.read()
         baked = _bake_view_mode_html(raw)
         self.assertIn('class="view-mode"', baked)
-        self.assertIn("body.view-mode #global-controls", baked)
+        # CSS lives in app.css; HTML only links it.
+        self.assertIn('href="/app.css"', baked)
+        with open(os.path.join(root, "frontend", "app.css"), encoding="utf-8") as f:
+            self.assertIn("body.view-mode #global-controls", f.read())
         # Idempotent when already present.
         self.assertEqual(_bake_view_mode_html(baked), baked)
 
@@ -169,6 +172,23 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(public["torrents"], [])
         self.assertTrue(public["public"])
         self.assertEqual(public["global"]["upload_rate"], 9)
+        self.assertNotIn("disk_free", public["global"])
+        self.assertTrue(public["controls"]["seeding_paused"])
+        self.assertEqual(public["controls"]["upload_limit"], 1)
+
+
+class SecurityHeadersTests(unittest.TestCase):
+    def test_responses_have_csp_and_frame_deny(self):
+        from fastapi.testclient import TestClient
+
+        from app.main import app
+
+        client = TestClient(app)
+        r = client.get("/api/healthz")
+        self.assertEqual(r.status_code, 200)
+        self.assertIn("default-src 'self'", r.headers.get("content-security-policy", ""))
+        self.assertEqual(r.headers.get("x-frame-options", "").upper(), "DENY")
+        self.assertEqual(r.headers.get("x-content-type-options"), "nosniff")
 
 
 class ProvisionTests(unittest.TestCase):
@@ -306,6 +326,7 @@ class BackendParityTests(unittest.TestCase):
 
     def test_build_snapshot_uses_status_batch(self):
         from app import main as main_mod
+        from app import runtime as runtime_mod
 
         class FakeSess:
             def __init__(self):
@@ -347,7 +368,7 @@ class BackendParityTests(unittest.TestCase):
                 }
 
         sess = FakeSess()
-        with mock.patch.object(main_mod, "coverage_index") as cov:
+        with mock.patch.object(runtime_mod, "coverage_index") as cov:
             cov.coverage_for_torrents.return_value = {
                 "seeded_bytes": 0,
                 "total_bytes": 0,
@@ -461,9 +482,13 @@ class MetricsSpaceTests(unittest.TestCase):
 class FrontendContractTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        root = os.path.join(os.path.dirname(__file__), "..")
-        with open(os.path.join(root, "frontend", "index.html"), encoding="utf-8") as f:
-            cls.html = f.read()
+        root = os.path.join(os.path.dirname(__file__), "..", "frontend")
+        parts = []
+        for name in ("index.html", "app.js", "app.css"):
+            with open(os.path.join(root, name), encoding="utf-8") as f:
+                parts.append(f.read())
+        cls.html = "\n".join(parts)
+        cls.js_path = os.path.join(root, "app.js")
 
     def test_503_only_auth_token_missing_triggers_auth_failure(self):
         self.assertIn('detail === "API_TOKEN must be configured"', self.html)
@@ -513,17 +538,10 @@ class FrontendContractTests(unittest.TestCase):
         self.assertIn("min-width: 320px", self.html)
 
     def test_script_still_parses(self):
-        scripts = re.findall(r"<script(?:\s[^>]*)?>(.*?)</script>", self.html, re.DOTALL)
-        with tempfile.NamedTemporaryFile("w", suffix=".js", encoding="utf-8", delete=False) as f:
-            f.write("\n".join(scripts))
-            path = f.name
-        try:
-            checked = subprocess.run(
-                ["node", "--check", path], capture_output=True, text=True, timeout=30
-            )
-            self.assertEqual(checked.returncode, 0, checked.stderr)
-        finally:
-            os.unlink(path)
+        checked = subprocess.run(
+            ["node", "--check", self.js_path], capture_output=True, text=True, timeout=30
+        )
+        self.assertEqual(checked.returncode, 0, checked.stderr)
 
 
 class ReleaseHygieneTests(unittest.TestCase):

@@ -1,5 +1,7 @@
 services:
   annas-torrents-webui:
     ports:
+      # BitTorrent swarm ports (separate from the localhost-only Web UI on 8090).
+      # Publishing these is intentional peer connectivity — not required to open the dashboard.
       - "${TORRENT_PORT:-6881}:${TORRENT_PORT:-6881}/tcp"
       - "${TORRENT_PORT:-6881}:${TORRENT_PORT:-6881}/udp"

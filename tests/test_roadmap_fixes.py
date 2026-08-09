@@ -23,6 +23,7 @@ from app.storage import path_key  # noqa: E402
 class RoadmapFixTests(unittest.TestCase):
     def test_available_free_rejects_mismatched_qbit_dest(self):
         from app import main as main_mod
+        from app import runtime as runtime_mod
 
         class FakeSess:
             def global_status(self):
@@ -34,7 +35,7 @@ class RoadmapFixTests(unittest.TestCase):
                 }
 
         async def run():
-            with mock.patch.object(main_mod, "_call_session_object", new=mock.AsyncMock()) as call:
+            with mock.patch.object(runtime_mod, "_call_session_object", new=mock.AsyncMock()) as call:
                 async def _fake(_sess, method, *args, **kwargs):
                     self.assertEqual(method, "global_status")
                     return FakeSess().global_status()

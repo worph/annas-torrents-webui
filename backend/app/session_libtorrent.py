@@ -44,6 +44,10 @@ class LibtorrentSession:
             mask |= lt.alert.category_t.storage_notification
         except AttributeError:
             pass
+        try:
+            mask |= lt.alert.category_t.stats_notification
+        except AttributeError:
+            pass
         self._ses = lt.session(
             {
                 "listen_interfaces": f"0.0.0.0:{listen_port}",
@@ -59,6 +63,30 @@ class LibtorrentSession:
         self._desired_download_limit = -1
         self._seeding_paused = False
         self._downloads_paused = False
+        # session_stats gauges (avoid deprecated session.status()).
+        self._stats_idx: dict[str, int] = {}
+        try:
+            for m in lt.session_stats_metrics():
+                name = getattr(m, "name", None) or ""
+                if name in {
+                    "net.recv_payload_bytes",
+                    "net.sent_payload_bytes",
+                    "dht.dht_nodes",
+                }:
+                    self._stats_idx[name] = int(m.value_index)
+        except Exception:  # noqa: BLE001
+            self._stats_idx = {}
+        self._stats_sample: dict[str, float | int] = {
+            "download_rate": 0,
+            "upload_rate": 0,
+            "total_download": 0,
+            "total_upload": 0,
+            "dht_nodes": 0,
+            "_recv": 0,
+            "_sent": 0,
+            "_t": time.monotonic(),
+            "_misses": 0,
+        }
 
     def default_save_path(self) -> str:
         return self.content_dir
@@ -257,8 +285,62 @@ class LibtorrentSession:
         except Exception:  # noqa: BLE001
             pass
 
+    def _refresh_session_stats(self) -> dict[str, float | int]:
+        """Pull payload counters / DHT via session_stats; decay rates after misses."""
+        sample = dict(self._stats_sample)
+        if not self._stats_idx:
+            return sample
+        try:
+            self._ses.post_session_stats()
+            deadline = time.monotonic() + 0.25
+            values = None
+            while time.monotonic() < deadline:
+                alerts = self._ses.pop_alerts()
+                for a in alerts:
+                    try:
+                        if isinstance(a, lt.session_stats_alert):
+                            values = a.values
+                            break
+                    except Exception:  # noqa: BLE001
+                        if a.__class__.__name__ == "session_stats_alert":
+                            values = getattr(a, "values", None)
+                            break
+                if values is not None:
+                    break
+                time.sleep(0.01)
+            if values is None:
+                misses = int(sample.get("_misses", 0)) + 1
+                sample["_misses"] = misses
+                # Decay stale rates after a few consecutive session_stats misses.
+                if misses >= 3:
+                    sample["download_rate"] = 0
+                    sample["upload_rate"] = 0
+                self._stats_sample = sample
+                return sample
+            recv_i = self._stats_idx.get("net.recv_payload_bytes")
+            sent_i = self._stats_idx.get("net.sent_payload_bytes")
+            dht_i = self._stats_idx.get("dht.dht_nodes")
+            now = time.monotonic()
+            recv = int(values[recv_i]) if recv_i is not None else int(sample["_recv"])
+            sent = int(values[sent_i]) if sent_i is not None else int(sample["_sent"])
+            dt = max(1e-3, now - float(sample["_t"]))
+            sample["download_rate"] = max(0, int((recv - int(sample["_recv"])) / dt))
+            sample["upload_rate"] = max(0, int((sent - int(sample["_sent"])) / dt))
+            sample["total_download"] = recv
+            sample["total_upload"] = sent
+            if dht_i is not None:
+                sample["dht_nodes"] = max(0, int(values[dht_i]))
+            sample["_recv"] = recv
+            sample["_sent"] = sent
+            sample["_t"] = now
+            sample["_misses"] = 0
+            self._stats_sample = sample
+        except Exception as e:  # noqa: BLE001
+            log.debug("session_stats refresh failed: %s", e)
+        return self._stats_sample
+
     def global_status(self) -> dict:
-        s = self._ses.status()
+        stats = self._refresh_session_stats()
         save_paths: set[str] = set()
         for h in list(self._handles.values()):
             try:
@@ -304,13 +386,13 @@ class LibtorrentSession:
             self._active_save_path = None
 
         return {
-            "download_rate": s.download_rate,
-            "upload_rate": s.upload_rate,
-            "total_download": s.total_download,
-            "total_upload": s.total_upload,
+            "download_rate": int(stats["download_rate"]),
+            "upload_rate": int(stats["upload_rate"]),
+            "total_download": int(stats["total_download"]),
+            "total_upload": int(stats["total_upload"]),
             "num_torrents": len(self._handles),
             "num_peers": num_peers,
-            "dht_nodes": s.dht_nodes,
+            "dht_nodes": int(stats["dht_nodes"]),
             "committed_bytes": content_bytes,
             "disk_free": disk_free if disk_known else 0,
             "disk_free_known": disk_known,
@@ -510,7 +592,7 @@ class LibtorrentSession:
 
         want = [(raw or "").lower() for raw in infohashes if raw]
         if not want:
-            return {"removed": 0, "files_deleted": None if not delete_files else True}
+            return {"removed": 0, "files_deleted": None}
 
         # Snapshot roots before any mutation — batch victims must see each other.
         snapshot: list[tuple[str, str, str]] = []

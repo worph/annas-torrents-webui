@@ -132,12 +132,111 @@ def _greedy_pick(
     return selected, freed
 
 
+def _candidate_bytes(c: dict) -> int:
+    return max(0, int(c.get("reclaimable_bytes") or 0))
+
+
+def _best_single(pool: list[dict], request_bytes: int) -> tuple[list[dict], int] | None:
+    """Smallest single item that covers the request (min overshoot)."""
+    best: dict | None = None
+    best_over = None
+    for c in pool:
+        b = _candidate_bytes(c)
+        if b < request_bytes:
+            continue
+        over = b - request_bytes
+        if best is None or over < best_over:
+            best, best_over = c, over
+    if best is None:
+        return None
+    return [best], _candidate_bytes(best)
+
+
+def _best_pair(pool: list[dict], request_bytes: int) -> tuple[list[dict], int] | None:
+    """Best 2-sum cover with minimal overshoot (O(n²); pools stay small)."""
+    best: tuple[dict, dict] | None = None
+    best_over = None
+    best_total = None
+    n = len(pool)
+    for i in range(n):
+        bi = _candidate_bytes(pool[i])
+        for j in range(i + 1, n):
+            total = bi + _candidate_bytes(pool[j])
+            if total < request_bytes:
+                continue
+            over = total - request_bytes
+            if best is None or over < best_over or (over == best_over and total < best_total):
+                best = (pool[i], pool[j])
+                best_over = over
+                best_total = total
+    if best is None:
+        return None
+    return [best[0], best[1]], best_total
+
+
+def _best_triple(pool: list[dict], request_bytes: int) -> tuple[list[dict], int] | None:
+    """Best 3-sum cover with minimal overshoot.
+
+    # ponytail: O(n³) capped at 36 largest items; full DP if packs stay huge.
+    """
+    if len(pool) > 36:
+        pool = sorted(pool, key=_candidate_bytes, reverse=True)[:36]
+    best: tuple[dict, dict, dict] | None = None
+    best_over = None
+    best_total = None
+    n = len(pool)
+    for i in range(n):
+        bi = _candidate_bytes(pool[i])
+        for j in range(i + 1, n):
+            bij = bi + _candidate_bytes(pool[j])
+            for k in range(j + 1, n):
+                total = bij + _candidate_bytes(pool[k])
+                if total < request_bytes:
+                    continue
+                over = total - request_bytes
+                if best is None or over < best_over or (over == best_over and total < best_total):
+                    best = (pool[i], pool[j], pool[k])
+                    best_over = over
+                    best_total = total
+    if best is None:
+        return None
+    return [best[0], best[1], best[2]], best_total
+
+
+def _pick_min_overshoot(
+    greedy_sel: list[dict],
+    greedy_freed: int,
+    pool: list[dict],
+    request_bytes: int,
+) -> tuple[list[dict], int]:
+    """Prefer greedy unless a single/pair/triple covers with less overshoot."""
+    if request_bytes <= 0:
+        return greedy_sel, greedy_freed
+    candidates: list[tuple[list[dict], int]] = [(greedy_sel, greedy_freed)]
+    single = _best_single(pool, request_bytes)
+    if single:
+        candidates.append(single)
+    pair = _best_pair(pool, request_bytes)
+    if pair:
+        candidates.append(pair)
+    triple = _best_triple(pool, request_bytes)
+    if triple:
+        candidates.append(triple)
+    # Prefer covering plans; among covers, min overshoot then fewer items.
+    covering = [(s, f) for s, f in candidates if f >= request_bytes]
+    if not covering:
+        return greedy_sel, greedy_freed
+    covering.sort(key=lambda sf: (sf[1] - request_bytes, len(sf[0]), -sf[1]))
+    return covering[0]
+
+
 def pick_combination(candidates: list, request_bytes: int) -> dict:
     """≥10 GB first (deletion_score); only then <10 GB largest→smallest.
 
     Never touches <10 GB while ≥10 GB can still cover the request.
     Excludes seeds_known=False from auto selection.
-    # ponytail: greedy two-pass (+ optional one-swap trim); DP knapsack if overshoot becomes a complaint.
+    After greedy, also try best single/pair/triple for lower overshoot.
+    # ponytail: full DP knapsack only if >3-item overshoot becomes a complaint.
     """
     request_bytes = max(0, int(request_bytes))
     unscored: list[dict] = []
@@ -163,6 +262,21 @@ def pick_combination(candidates: list, request_bytes: int) -> dict:
     if freed < request_bytes and small:
         more, freed = _greedy_pick(small, request_bytes, already_freed=freed, key=size_key)
         selected.extend(more)
+
+    # Prefer lower overshoot from large pool alone when it still covers.
+    if request_bytes and large:
+        large_only_sel, large_only_freed = _pick_min_overshoot(
+            [c for c in selected if not c.get("protected")],
+            sum(_candidate_bytes(c) for c in selected if not c.get("protected")),
+            large,
+            request_bytes,
+        )
+        # If large alone covers, prefer that overshoot-aware plan (avoids eating small).
+        if large_only_freed >= request_bytes:
+            selected, freed = large_only_sel, large_only_freed
+        else:
+            pool = large + small
+            selected, freed = _pick_min_overshoot(selected, freed, pool, request_bytes)
 
     return {
         "selected": selected,
@@ -196,6 +310,19 @@ if __name__ == "__main__":
     assert out["freed_bytes"] == 50 * GB
     assert out["overshoot_bytes"] == 10 * GB
     assert len(out["unscored"]) == 1
+
+    # Three mid-size packs beat one huge torrent on overshoot.
+    triple_pool = [
+        {"infohash": "t1", "name": "a", "size": 20 * GB, "num_seeds": 10, "progress": 1.0},
+        {"infohash": "t2", "name": "b", "size": 20 * GB, "num_seeds": 10, "progress": 1.0},
+        {"infohash": "t3", "name": "c", "size": 20 * GB, "num_seeds": 10, "progress": 1.0},
+        {"infohash": "t4", "name": "huge", "size": 100 * GB, "num_seeds": 10, "progress": 1.0},
+    ]
+    trip = pick_combination(triple_pool, 55 * GB)
+    assert trip["freed_bytes"] == 60 * GB
+    assert trip["overshoot_bytes"] == 5 * GB
+    assert len(trip["selected"]) == 3
+    assert "t4" not in {s["infohash"] for s in trip["selected"]}
 
     # Only small torrents — largest first (keep tiniest last), ignore seed score.
     only_small = pick_combination(

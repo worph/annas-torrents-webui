@@ -18,9 +18,20 @@ if [ "$(id -u)" = "0" ]; then
   # Nested incomplete downloads left root-owned by older images must be writable.
   # ponytail: full tree walk; skip when CONTENT_CHOWN=0 for huge binds.
   if [ "${CONTENT_CHOWN:-1}" != "0" ]; then
+    echo "entrypoint: chown -R $DATA_DIR/content (can take a while on multi-TB binds; set CONTENT_CHOWN=0 to skip)…" >&2
     chown -R app:app "$DATA_DIR/content" 2>/dev/null || true
+    echo "entrypoint: content ownership pass finished" >&2
   else
+    echo "entrypoint: CONTENT_CHOWN=0 — only top-level $DATA_DIR/content ownership" >&2
     chown app:app "$DATA_DIR/content" 2>/dev/null || true
+  fi
+  if [ -z "${API_TOKEN:-}" ]; then
+    case "$(printf '%s' "${ALLOW_UNAUTHENTICATED_API:-}" | tr '[:upper:]' '[:lower:]')" in
+      1|true|yes) ;;
+      *)
+        echo "warning: API_TOKEN is empty — private API returns 503 until you set one (copy .env.example → .env)" >&2
+        ;;
+    esac
   fi
   if ! runuser -u app -- test -w "$DATA_DIR" \
     || ! runuser -u app -- test -w "$DATA_DIR/content" \

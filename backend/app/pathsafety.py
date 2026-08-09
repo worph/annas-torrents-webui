@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import shutil
+import stat
 
 
 def content_roots_overlap(save_a: str, name_a: str, save_b: str, name_b: str) -> bool:
@@ -147,6 +148,73 @@ def safe_delete_target(save_path: str, name: str) -> str | None:
     return target
 
 
+def _dir_open_flags() -> int:
+    flags = os.O_RDONLY
+    if hasattr(os, "O_DIRECTORY"):
+        flags |= os.O_DIRECTORY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    return flags
+
+
+def _rmtree_at(parent_fd: int, name: str) -> None:
+    """Delete directory ``name`` under ``parent_fd`` without following leaf symlinks."""
+    flags = _dir_open_flags()
+    fd = os.openat(parent_fd, name, flags)
+    try:
+        with os.scandir(fd) as it:
+            entries = [(e.name, e.is_dir(follow_symlinks=False), e.is_symlink()) for e in it]
+        for child, is_dir, is_link in entries:
+            if is_link or not is_dir:
+                os.unlink(child, dir_fd=fd)
+            else:
+                _rmtree_at(fd, child)
+    finally:
+        os.close(fd)
+    os.rmdir(name, dir_fd=parent_fd)
+
+
+def _delete_posix_at(base: str, parts: list[str]) -> bool:
+    """Delete via directory fds + unlinkat/rmdir so a swapped symlink is not followed."""
+    if not parts or not hasattr(os, "openat"):
+        return False
+    flags = _dir_open_flags()
+    owned: list[int] = []
+    try:
+        parent_fd = os.open(base, flags)
+        owned.append(parent_fd)
+        for part in parts[:-1]:
+            st = os.stat(part, dir_fd=parent_fd, follow_symlinks=False)
+            if stat.S_ISLNK(st.st_mode) or not stat.S_ISDIR(st.st_mode):
+                return False
+            next_fd = os.openat(parent_fd, part, flags)
+            owned.append(next_fd)
+            parent_fd = next_fd
+        leaf = parts[-1]
+        st = os.stat(leaf, dir_fd=parent_fd, follow_symlinks=False)
+        if stat.S_ISLNK(st.st_mode):
+            # Removing the link itself is fine and does not touch the link target.
+            os.unlink(leaf, dir_fd=parent_fd)
+            return True
+        if stat.S_ISDIR(st.st_mode):
+            _rmtree_at(parent_fd, leaf)
+            return True
+        if stat.S_ISREG(st.st_mode):
+            os.unlink(leaf, dir_fd=parent_fd)
+            return True
+        return False
+    except OSError:
+        return False
+    finally:
+        for fd in reversed(owned):
+            try:
+                os.close(fd)
+            except OSError:
+                pass
+
+
 def delete_under(save_path: str, name: str) -> bool:
     """Delete file/dir named ``name`` under ``save_path`` if containment holds."""
     target = safe_delete_target(save_path, name)
@@ -159,19 +227,33 @@ def delete_under(save_path: str, name: str) -> bool:
     except OSError:
         return False
     # Re-check immediately before mutating — shrinks ancestor-junction TOCTOU.
-    # ponytail: still not open-by-handle atomic; escalate if a real race is observed.
     if _reparse_on_ancestors(save_path) or os.path.realpath(save_path) != base:
         return False
     if safe_delete_target(save_path, name) != target:
         return False
     parts = [p for p in str(name).strip().replace("\\", "/").split("/") if p and p != "."]
+    if not parts:
+        return False
     lexical = os.path.normpath(os.path.join(base, *parts))
     if _reparse_on_walk(base, parts) or _is_reparse(lexical):
         return False
+
+    # POSIX: delete relative to directory fds (symlink swap cannot redirect unlink).
+    if os.name != "nt" and hasattr(os, "openat"):
+        return _delete_posix_at(base, parts)
+
+    # Windows: no portable openat — final reparse revalidation, then lexical delete.
+    # ponytail: Windows residual TOCTOU between this check and rmtree; escalate with
+    # FILE_FLAG_OPEN_REPARSE_POINT + file-id compare if a real race is observed.
+    if _reparse_on_walk(base, parts) or _is_reparse(lexical):
+        return False
+    if safe_delete_target(save_path, name) != target:
+        return False
     try:
-        # Delete the lexical path (never follow a reparse into another tree).
         if os.path.isdir(lexical) and not _is_reparse(lexical):
             if os.path.realpath(lexical) != target:
+                return False
+            if _is_reparse(lexical):
                 return False
             shutil.rmtree(lexical)
         elif os.path.isfile(lexical) or os.path.islink(lexical) or _is_reparse(lexical):
@@ -185,6 +267,8 @@ def delete_under(save_path: str, name: str) -> bool:
 
 if __name__ == "__main__":
     import tempfile
+    import threading
+    import time
 
     with tempfile.TemporaryDirectory() as td:
         nested = os.path.join(td, "ok")
@@ -226,4 +310,42 @@ if __name__ == "__main__":
             assert safe_delete_target(sub, "x") is None
             assert not delete_under(sub, "x")
             assert os.path.isfile(victim)
+
+        # Race: after validation, replace leaf with symlink to outside — outside survives.
+        outside_root = tempfile.mkdtemp()
+        try:
+            outside_file = os.path.join(outside_root, "treasure")
+            open(outside_file, "w").write("keep")
+            victim_dir = os.path.join(td, "race")
+            os.makedirs(victim_dir)
+            open(os.path.join(victim_dir, "f"), "w").close()
+            assert safe_delete_target(td, "race")
+
+            barrier = threading.Barrier(2)
+            result = {"ok": None}
+
+            def deleter():
+                barrier.wait()
+                # Small delay so swap can win the race window on slow paths.
+                time.sleep(0.01)
+                result["ok"] = delete_under(td, "race")
+
+            def swapper():
+                barrier.wait()
+                try:
+                    shutil.rmtree(victim_dir)
+                    os.symlink(outside_root, victim_dir, target_is_directory=True)
+                except (OSError, NotImplementedError):
+                    result["ok"] = False
+
+            t1 = threading.Thread(target=deleter)
+            t2 = threading.Thread(target=swapper)
+            t1.start()
+            t2.start()
+            t1.join()
+            t2.join()
+            assert os.path.isfile(outside_file), "outside target must survive"
+            assert open(outside_file).read() == "keep"
+        finally:
+            shutil.rmtree(outside_root, ignore_errors=True)
     print("ok: pathsafety")

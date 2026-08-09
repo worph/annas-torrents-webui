@@ -79,6 +79,36 @@ class SpaceRankingTests(unittest.TestCase):
         self.assertEqual(out["freed_bytes"], 25 * GB)
         self.assertEqual(out["overshoot_bytes"], 15 * GB)
 
+    def test_pair_beats_single_overshoot(self):
+        # Greedy may grab 40GB; best pair 20+15 covers 30 with less waste.
+        out = pick_combination(
+            [
+                {"infohash": "big", "name": "40", "size": 40 * GB, "num_seeds": 50, "progress": 1.0},
+                {"infohash": "a", "name": "20", "size": 20 * GB, "num_seeds": 50, "progress": 1.0},
+                {"infohash": "b", "name": "15", "size": 15 * GB, "num_seeds": 50, "progress": 1.0},
+            ],
+            30 * GB,
+        )
+        hashes = {s["infohash"] for s in out["selected"]}
+        self.assertEqual(hashes, {"a", "b"})
+        self.assertEqual(out["freed_bytes"], 35 * GB)
+        self.assertEqual(out["overshoot_bytes"], 5 * GB)
+
+    def test_triple_beats_huge_overshoot(self):
+        out = pick_combination(
+            [
+                {"infohash": "t1", "name": "a", "size": 20 * GB, "num_seeds": 10, "progress": 1.0},
+                {"infohash": "t2", "name": "b", "size": 20 * GB, "num_seeds": 10, "progress": 1.0},
+                {"infohash": "t3", "name": "c", "size": 20 * GB, "num_seeds": 10, "progress": 1.0},
+                {"infohash": "t4", "name": "huge", "size": 100 * GB, "num_seeds": 10, "progress": 1.0},
+            ],
+            55 * GB,
+        )
+        hashes = {s["infohash"] for s in out["selected"]}
+        self.assertEqual(hashes, {"t1", "t2", "t3"})
+        self.assertEqual(out["freed_bytes"], 60 * GB)
+        self.assertEqual(out["overshoot_bytes"], 5 * GB)
+
     def test_classify_uses_seeds_total_without_num_seeds_key(self):
         c = classify_torrent(
             {

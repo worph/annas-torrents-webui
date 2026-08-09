@@ -823,13 +823,14 @@ class QBittorrentSession:
     def remove_torrents(self, infohashes: list[str], delete_files: bool = True) -> dict:
         """Remove torrents. Returns ``{removed, files_deleted}``.
 
-        ``files_deleted`` is False when shared-content refuse applied, True when
-        ``delete_files`` was false (N/A kept as None), and None when qBit was
-        asked to delete files (disk outcome unverified).
+        ``files_deleted`` is False when shared-content refuse applied or delete
+        was incomplete; None when delete was not requested, or when qBit was
+        asked to delete files (disk outcome is never verified here — do not
+        claim True without local evidence).
         """
         hashes = [h.lower() for h in infohashes if h]
         if not hashes:
-            return {"removed": 0, "files_deleted": None if not delete_files else True}
+            return {"removed": 0, "files_deleted": None}
         want = set(hashes)
         files_ok = True
         effective_delete = delete_files

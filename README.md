@@ -49,7 +49,7 @@ This web UI wraps the same torrent-selection logic in a dashboard that **paramet
 - Configure qBittorrent URL, user, category, and save-path behavior. The qBittorrent password can be changed at runtime but is never written to `settings.json`.
 - Settings are validated, saved atomically, and backend changes are rejected while provisioning is running.
 - Private API routes require `API_TOKEN` by default. The browser uses a short-lived, one-use SSE ticket instead of putting the long-lived token in the event-stream URL.
-- Public status and events are redacted: no filesystem paths, infohashes, torrent names, controls, or settings are exposed.
+- Public status and events are redacted: no filesystem paths, infohashes, torrent names, settings, or host free-disk capacity. Contribution aggregates, rates, and pause/limit aggregates remain so `/view` can show impact without the control panel.
 
 ### Share your impact & support Anna's Archive
 - **Share buttons** for X, Bluesky, Mastodon, Reddit, Telegram, WhatsApp, Facebook, LinkedIn, Email, and copy — plus the native share sheet where available. The message uses rounded factual numbers from your contribution.
@@ -98,35 +98,70 @@ This web UI wraps the same torrent-selection logic in a dashboard that **paramet
 
 ## Getting Started
 
+### Quick start (prebuilt image)
+
+Pin a **semver tag** from [GHCR](https://github.com/worph/annas-torrents-webui/pkgs/container/annas-torrents-webui) — do not rely on `latest` for production (every `main` push updates it):
+
+```bash
+mkdir annas-seedbox && cd annas-seedbox
+# Generate a token (Linux/macOS). On Windows PowerShell: [guid]::NewGuid().ToString('N')
+export API_TOKEN="$(openssl rand -hex 24)"
+docker pull ghcr.io/worph/annas-torrents-webui:latest   # or :1.2.3 when tagged
+docker run --rm -d --name annas-torrents-webui \
+  -e API_TOKEN \
+  -e TORRENT_PORT=0 \
+  -p 127.0.0.1:8090:8080 \
+  -v "$(pwd)/data:/data" \
+  ghcr.io/worph/annas-torrents-webui:latest
+```
+
+Open **`http://127.0.0.1:8090`**, paste the same `API_TOKEN` in **Settings**, set **Content to add**, and start. For BitTorrent ports and Compose overlays, use the sections below.
+
+Copy [`.env.example`](./.env.example) to `.env` when using Compose.
+
 ### Prerequisites
-- Docker with Docker Compose v2.
+- Docker with Docker Compose v2 (Docker Desktop on Windows/macOS is fine).
 - Disk space for whatever you choose to seed.
 - For **libtorrent** (default): a forwarded BitTorrent port if you want incoming peer connections. The web-only Compose file does not publish port `6881`; use the libtorrent override below.
 - For **qBittorrent**: Web API enabled, a category for this app, and a password when qBittorrent is outside the app container.
-- A long random `API_TOKEN` for any non-local or real deployment. Private APIs are intentionally unavailable by default when the token is missing.
+- A long random `API_TOKEN` for any non-local or real deployment. Private APIs are intentionally unavailable by default when the token is missing (HTTP 503 until configured).
 
 ### Run with Docker Compose (libtorrent — default)
 
-Create a local `.env` file. It is ignored by Git:
+Create a local `.env` from the example (it is ignored by Git):
+
+```bash
+cp .env.example .env
+# edit API_TOKEN=...
+```
 
 ```env
 API_TOKEN=replace-with-a-long-random-value
 # PUBLIC_URL=https://seed.example.com
 ```
 
-Then run:
+Then run (build from source), or set `image: ghcr.io/worph/annas-torrents-webui:<version>` in Compose and omit `--build`:
 
 ```bash
 git clone https://github.com/worph/annas-torrents-webui
 cd annas-torrents-webui
+cp .env.example .env   # set API_TOKEN
 docker compose -f docker-compose.yml -f docker-compose.libtorrent.yml up -d --build
 ```
 
-Open **`http://localhost:8090`**, set **Content to add** (TB), choose a destination if needed, and click **Start contributing**.
+Open **`http://localhost:8090`**, enter the API token in Settings if prompted, set **Content to add** (TB), choose a destination if needed, and click **Start contributing**.
 
-The Compose override publishes `6881` TCP and UDP for libtorrent. The base Compose file publishes the web UI on localhost port **8090** by default (avoids clashing with qBittorrent on 8080) and does not publish the BitTorrent port.
+The Compose override publishes `6881` TCP and UDP for libtorrent (**swarm**). The base Compose file publishes the **Web UI** on localhost port **8090** only — opening the dashboard does not require publishing BitTorrent ports, and publishing `6881` does not expose the control plane.
 
 Sizes in the UI use decimal **GB / TB** with two decimals (e.g. `22.03 TB`).
+
+### Windows Docker notes
+
+- Prefer **WSL2** backend in Docker Desktop. Bind mounts on NTFS often ignore Unix `chown`; the entrypoint may warn and still run if the mount is writable.
+- First start with a large existing `./data/content` tree can look “stuck” while `CONTENT_CHOWN` walks the tree — watch logs for `entrypoint: chown -R …` / `ownership pass finished`, or set `CONTENT_CHOWN=0` after you know permissions are fine.
+- Keep the Web UI on `127.0.0.1:8090`. The libtorrent overlay’s `6881` publish is separate; only open it if you want incoming peers.
+- PowerShell token example: `$env:API_TOKEN = [guid]::NewGuid().ToString('N')`.
+- Path tips for qBittorrent on the Windows host: use paths **as qBit sees them** in `QBIT_SAVE_PATH` / `STORAGE_PATHS` (for example `D:\Downloads`), not Linux container paths.
 
 ### Run with an existing qBittorrent
 
@@ -175,6 +210,16 @@ STORAGE_PATHS=/data/content,/extra
 ```
 
 On Windows with **libtorrent**, other local drives appear as `D:` / `E:` and resolve to `X:\Anna's Archive Torrents`, created if missing. **Browse…** opens a native folder dialog only for the embedded libtorrent backend when it runs directly on Windows; Docker and qBittorrent deployments should use `STORAGE_PATHS` and volume mounts. The dialog opens on the machine running the backend.
+
+### Backend differences
+
+The HTTP API is the same for both backends; these behaviors intentionally differ:
+
+| Area | libtorrent | qBittorrent |
+|------|------------|-------------|
+| Free space | Local disk usage for active save paths | `free_space_on_disk` only when the destination matches qBit's default save path; otherwise **unknown** (never uses the web UI host's disks for remote paths) |
+| Rate limits | Session-global upload/download limits | Per-torrent limits on this app's category; new adds inherit the current desired limits |
+| Preallocate | Per-torrent allocate storage mode + resume marker | Temporary **global** `preallocate_all` for the whole client during add (refused if other categories have torrents); restored afterward, with a crash-recovery flag |
 
 The app does not accept arbitrary save paths. A torrent matches a destination only when its save path equals or is inside that destination (selecting a child folder does not match torrents stored in the parent). Space recovery preview uses the same destination allowlist as provisioning. Path checks keep qBittorrent's remote paths separate from local disk accounting, and refuse deletion targets that escape the torrent's save directory.
 
@@ -227,6 +272,7 @@ For a trusted local development instance without a token, set `ALLOW_UNAUTHENTIC
 | `PUBLIC_URL` | *(unset)* | Public base URL used to create `/view` share links |
 | `API_TOKEN` | *(unset)* | Required for private APIs by default; use a long random value |
 | `ALLOW_UNAUTHENTICATED_API` | *(unset)* | Development-only escape hatch; `1`, `true`, or `yes` permits private APIs without `API_TOKEN` |
+| `TRUST_PROXY_HEADERS` | *(unset)* | When `1`/`true`/`yes`, public SSE caps use the first `X-Forwarded-For` hop (only behind a trusted proxy) |
 | `CONTENT_CHOWN` | `1` | Entrypoint recursively `chown`s `$DATA_DIR/content`; set `0` to skip the walk on large binds |
 
 Settings changed in the UI are validated before a backend switch, written atomically, and kept in `DATA_DIR/settings.json`. `QBIT_PASS` is deliberately excluded from that file, so it must be supplied again through the environment after a restart.
@@ -238,9 +284,13 @@ Install the backend dependencies and run the regression suite:
 ```bash
 python3 -m pip install -r backend/requirements.txt
 python3 -m unittest discover -s tests -v
+node --test tests/frontend/*.mjs
+node --check frontend/app.js
+# Optional DOM smoke (first time: npm install && npx playwright install chromium)
+npx playwright test
 ```
 
-The frontend JavaScript syntax check needs Node.js (`node --check`). On Windows, `python` usually works as a substitute for `python3`.
+On Windows, `python` usually works as a substitute for `python3`.
 
 Run the module self-checks:
 
@@ -287,7 +337,24 @@ The entrypoint recursively `chown`s `$DATA_DIR/content` so resumed downloads rem
 
 This app **downloads and seeds actual content** via libtorrent or qBittorrent. Distributing certain materials may not be legal in all jurisdictions. **Use a VPN** when running it, and seed at your own risk. You are responsible for what you choose to contribute.
 
-Prefer the default localhost binding, set a strong `API_TOKEN`, and use HTTPS if the service is exposed through a reverse proxy. The `/view` page and `/api/public/*` endpoints are read-only and redact paths, hashes, torrent names, controls, and settings. Keep `.env` files and the `data/` volume out of commits.
+Prefer the default localhost binding, set a strong `API_TOKEN`, and use HTTPS if the service is exposed through a reverse proxy. The `/view` page and `/api/public/*` endpoints are read-only: they omit paths, hashes, torrent names, settings, and **host disk capacity** (`disk_free` / totals). They still show contribution aggregates, transfer rates, torrent/peer counts, and pause/limit aggregates. Keep `.env` files and the `data/` volume out of commits.
+
+Responses include a minimal Content-Security-Policy plus `X-Frame-Options: DENY` and `X-Content-Type-Options: nosniff` so a future XSS is harder to turn into full control-plane access via the token in `localStorage`.
+
+### Exposing safely
+
+Before publishing the UI or `/view` beyond localhost, walk this checklist:
+
+1. **Bind** — keep the default `127.0.0.1` publish (or bind the reverse proxy only). Do not set Compose/`-p` to `0.0.0.0` unless you intend internet exposure.
+2. **Token** — set a long random `API_TOKEN`. Never set `ALLOW_UNAUTHENTICATED_API=1` on an exposed host.
+3. **HTTPS** — terminate TLS at the reverse proxy; do not send the API token over plain HTTP on untrusted networks.
+4. **Understand `/view`** — public pages reveal that you seed, approximate contribution size, live rates, and pause/limit aggregates. They do **not** hide the fact that a seedbox exists. Do not treat “share your contribution” as anonymity.
+5. **BT ports** — publishing `6881` (libtorrent overlay) is separate from the WebUI port. Opening BT is intentional swarm participation; opening `8090` is control-plane risk.
+6. **Proxy trust** — if you put a reverse proxy in front, set `TRUST_PROXY_HEADERS=1` only when the proxy strips/overwrites `X-Forwarded-For`. Otherwise public SSE rate limits collapse to one IP (or become spoofable).
+
+### Native Windows delete note
+
+Docker/Linux builds use POSIX `openat`-style deletes. A **native Windows** backend still has a narrow TOCTOU window between the final reparse check and `rmtree`/`unlink` (see `pathsafety.py`). Prefer the Linux container for production seedboxes; escalate only if a real race is observed.
 
 ---
 
@@ -300,3 +367,10 @@ Prefer the default localhost binding, set a strong `API_TOKEN`, and use HTTPS if
 ## License
 
 See [LICENSE](./LICENSE).
+
+## Community
+
+- [CONTRIBUTING.md](./CONTRIBUTING.md) — tests and PR expectations  
+- [SECURITY.md](./SECURITY.md) — private vulnerability reports  
+- [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)  
+- [CHANGELOG.md](./CHANGELOG.md) — pin GHCR by semver, not `latest`  
