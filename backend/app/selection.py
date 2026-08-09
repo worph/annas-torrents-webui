@@ -122,6 +122,8 @@ def _parse_bencode(data: bytes, pos: int = 0, depth: int = 0) -> tuple[object, i
             key, pos = _parse_bencode(data, pos, depth + 1)
             if not isinstance(key, bytes):
                 raise ValueError("dictionary key is not bytes")
+            if key in items:
+                raise ValueError("duplicate dictionary key")
             value, pos = _parse_bencode(data, pos, depth + 1)
             items[key] = value
         if pos >= len(data):
@@ -159,6 +161,8 @@ def _torrent_info_slice(data: bytes) -> tuple[int, int]:
         value_start = pos
         _, pos = _parse_bencode(data, pos)
         if key == b"info":
+            if info_start is not None:
+                raise ValueError("torrent has duplicate info dictionary")
             info_start, info_end = value_start, pos
     if pos >= len(data) or data[pos : pos + 1] != b"e" or info_start is None or info_end is None:
         raise ValueError("torrent has no info dictionary")

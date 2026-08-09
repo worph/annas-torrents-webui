@@ -53,7 +53,7 @@ This web UI wraps the same torrent-selection logic in a dashboard that **paramet
 
 ### Share your impact & support Anna's Archive
 - **Share buttons** for X, Bluesky, Mastodon, Reddit, Telegram, WhatsApp, Facebook, LinkedIn, Email, and copy — plus the native share sheet where available. The message uses rounded factual numbers from your contribution.
-- With `PUBLIC_URL` set, share links can point to a **read-only `/view` page** showing community impact without the control panel or private torrent details.
+- With `PUBLIC_URL` set, share links can point to a **read-only `/view` page** showing community impact without the control panel or private torrent details. The server bakes `class="view-mode"` into the HTML so CSS hides private chrome even before JavaScript runs; the public API still serves a redacted snapshot.
 - **Donate to Anna's Archive** stays in the header.
 
 ---
@@ -160,7 +160,7 @@ The **Download destination** selector chooses where *new* torrents are saved. Ex
 | Backend | Default path | Other locations |
 |---------|--------------|-----------------|
 | libtorrent | `DATA_DIR/content` (`./data/content` next to the repo / Compose volume) | **Browse…** in the UI, or `STORAGE_PATHS` (the path must be mounted into the container) |
-| qBittorrent | `QBIT_SAVE_PATH` when set; otherwise no save path is sent and qBittorrent uses its own default | **Browse…** when the backend runs directly on Windows, or `STORAGE_PATHS` using paths as qBittorrent sees them |
+| qBittorrent | `QBIT_SAVE_PATH` when set; otherwise no save path is sent and qBittorrent uses its own default | `STORAGE_PATHS` using paths as qBittorrent sees them (**Browse…** is libtorrent-only) |
 
 `./data` is the app's state volume: torrent metadata, resume data, settings, and the default libtorrent content directory. Extra libtorrent destinations must be mounted, for example:
 
@@ -174,7 +174,7 @@ volumes:
 STORAGE_PATHS=/data/content,/extra
 ```
 
-On Windows, other local drives appear as `D:` / `E:` and resolve to `X:\Anna's Archive Torrents`, created if missing. **Browse…** opens a native folder dialog only when the backend runs directly on Windows; Docker deployments should use `STORAGE_PATHS` and volume mounts. The dialog opens on the machine running the backend.
+On Windows with **libtorrent**, other local drives appear as `D:` / `E:` and resolve to `X:\Anna's Archive Torrents`, created if missing. **Browse…** opens a native folder dialog only for the embedded libtorrent backend when it runs directly on Windows; Docker and qBittorrent deployments should use `STORAGE_PATHS` and volume mounts. The dialog opens on the machine running the backend.
 
 The app does not accept arbitrary save paths. A torrent matches a destination only when its save path equals or is inside that destination (selecting a child folder does not match torrents stored in the parent). Space recovery preview uses the same destination allowlist as provisioning. Path checks keep qBittorrent's remote paths separate from local disk accounting, and refuse deletion targets that escape the torrent's save directory.
 
@@ -214,6 +214,7 @@ For a trusted local development instance without a token, set `ALLOW_UNAUTHENTIC
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `WEB_PORT` | `8090` | Host port used by Compose for the web UI (avoids clashing with qBittorrent on 8080) |
+| `HOST_DATA_DIR` | `./data` | Host path bind-mounted into the container at `DATA_DIR` |
 | `TORRENT_BACKEND` | `libtorrent` | `libtorrent` or `qbittorrent`; Docker build arg installs packages and sets the image default |
 | `TORRENT_PORT` | `6881` | libtorrent listen port |
 | `DATA_DIR` | `/data` | App state: torrent metadata, resume data, and `settings.json`; default content is `DATA_DIR/content` |
@@ -226,6 +227,7 @@ For a trusted local development instance without a token, set `ALLOW_UNAUTHENTIC
 | `PUBLIC_URL` | *(unset)* | Public base URL used to create `/view` share links |
 | `API_TOKEN` | *(unset)* | Required for private APIs by default; use a long random value |
 | `ALLOW_UNAUTHENTICATED_API` | *(unset)* | Development-only escape hatch; `1`, `true`, or `yes` permits private APIs without `API_TOKEN` |
+| `CONTENT_CHOWN` | `1` | Entrypoint recursively `chown`s `$DATA_DIR/content`; set `0` to skip the walk on large binds |
 
 Settings changed in the UI are validated before a backend switch, written atomically, and kept in `DATA_DIR/settings.json`. `QBIT_PASS` is deliberately excluded from that file, so it must be supplied again through the environment after a restart.
 

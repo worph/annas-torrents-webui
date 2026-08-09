@@ -239,6 +239,7 @@ class RegressionTests(unittest.TestCase):
         self.assertIn("async with _session_lock:", body)
         self.assertIn("sess = session", body)
         self.assertIn("sess.controls_state", body)
+        self.assertIn("_session_generation != gen", body)
         self.assertNotIn('await _call_session("controls_state")', body)
 
     def test_space_preview_token_cleanup_holds_space_lock(self):
@@ -442,6 +443,7 @@ class RegressionTests(unittest.TestCase):
         body = text[start:end]
         self.assertIn('backend == "qbittorrent"', body)
         self.assertIn("Never trust this host's disk_usage", body)
+        self.assertIn("storage.path_key(reported) != storage.path_key(dest)", body)
 
     def test_libtorrent_allocated_bytes_matches_prealloc_commit(self):
         root = os.path.join(os.path.dirname(__file__), "..")
@@ -626,11 +628,12 @@ class RegressionTests(unittest.TestCase):
         start = text.index("async def _snapshot_loop()")
         end = text.index("async def _background_loop()", start)
         body = text[start:end]
-        lock = body.index("async with _session_lock:")
+        # Publish only after a generation check under the asyncio lock.
+        self.assertIn('_session_generation == gen', body)
         write = body.index('_snapshot_cache["data"] = snap')
+        lock = body.rfind("async with _session_lock:", 0, write)
+        self.assertGreaterEqual(lock, 0)
         self.assertLess(lock, write)
-        # Write must stay indented under the lock (no release before assign).
-        self.assertGreater(body.find("_snapshot_cache", lock), lock)
 
     def test_public_events_caps_connections(self):
         root = os.path.join(os.path.dirname(__file__), "..")
@@ -859,7 +862,9 @@ class RegressionTests(unittest.TestCase):
         body = html[start:end]
         self.assertIn("index_ready", body)
         self.assertNotIn("is_complete || t.is_seeding", body)
-        self.assertIn("if (VIEW_MODE) return;", html[html.index("function pushHistorySnapshot"):html.index("function flashIfChanged")])
+        self.assertNotIn("HISTORY_KEY", html)
+        self.assertIn('id="upload-limit"', html)
+        self.assertIn('el.classList.remove("is-active")', html)
 
     def test_qbit_missing_files_not_complete(self):
         root = os.path.join(os.path.dirname(__file__), "..")

@@ -71,15 +71,16 @@ jobs:
             backend/app/space.py \
             backend/app/storage.py \
             backend/app/ux.py \
-            tests/test_regressions.py
+            tests/test_regressions.py \
+            tests/test_roadmap_fixes.py \
+            tests/test_bug_hunt.py
           test -f docker-entrypoint.sh
           ! grep -U $'\r' docker-entrypoint.sh
       - name: Compose config validates
         run: |
           docker compose -f docker-compose.yml config --quiet
-          TORRENT_PORT=12345 docker compose -f docker-compose.yml -f docker-compose.libtorrent.yml config --quiet
           # Overlay requires a positive host/container port; TORRENT_PORT=0 is for app-only CI.
-          docker compose -f docker-compose.yml config --quiet
+          TORRENT_PORT=12345 docker compose -f docker-compose.yml -f docker-compose.libtorrent.yml config --quiet
       - name: Docker build smoke test
         run: |
           docker build --tag annas-torrents-webui:ci .

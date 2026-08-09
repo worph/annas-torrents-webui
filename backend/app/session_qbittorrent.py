@@ -95,6 +95,8 @@ class QBittorrentSession:
         self._downloads_paused = False
         self._controls_synced = False
         self._preallocated: set[str] = set()
+        self._status_torrents: list[dict] | None = None
+        self._status_batch = False
 
     def _assert_host_still_safe(self) -> None:
         """Re-check host so DNS rebinding cannot reach metadata or public cleartext."""
@@ -232,20 +234,29 @@ class QBittorrentSession:
             return 0
 
     def _sync_controls_from_qbit(self) -> None:
-        """Rebuild local pause/limit mirrors from qBit once per session."""
+        """Rebuild local pause/limit mirrors from this category once per session.
+
+        Reads per-torrent limits (the scope this app writes), not global server_state.
+        """
         if self._controls_synced:
             return
         try:
-            main = self._request("GET", "/api/v2/sync/maindata").json()
-            server_state = main.get("server_state", {}) or {}
-            up = server_state.get("up_rate_limit")
-            down = server_state.get("dl_rate_limit")
-            if up is not None:
-                up_i = int(up)
-                self._desired_upload_limit = -1 if up_i <= 0 else up_i
-            if down is not None:
-                down_i = int(down)
-                self._desired_download_limit = -1 if down_i <= 0 else down_i
+            torrents = self._torrents()
+            if torrents:
+                h = self._hash_of(torrents[0])
+                if h:
+                    up = self._request(
+                        "GET", "/api/v2/torrents/uploadLimit", params={"hashes": h}
+                    ).json()
+                    down = self._request(
+                        "GET", "/api/v2/torrents/downloadLimit", params={"hashes": h}
+                    ).json()
+                    if isinstance(up, dict) and h in up:
+                        up_i = int(up[h])
+                        self._desired_upload_limit = -1 if up_i <= 0 else up_i
+                    if isinstance(down, dict) and h in down:
+                        down_i = int(down[h])
+                        self._desired_download_limit = -1 if down_i <= 0 else down_i
             self._controls_synced = True
         except Exception as e:  # noqa: BLE001
             log.warning("could not sync qBittorrent controls: %s", e)
@@ -411,10 +422,31 @@ class QBittorrentSession:
                 log.info("added torrent %s (%s) → %s", os.path.basename(path), ih, dest or "qBit default")
                 if preallocate:
                     self._preallocated.add(ih)
+                # Apply current category limits to the new hash (setters only touch existing hashes).
+                try:
+                    if not self._seeding_paused:
+                        self._request(
+                            "POST",
+                            "/api/v2/torrents/setUploadLimit",
+                            data={
+                                "hashes": ih,
+                                "limit": str(_qbittorrent_rate_limit(self._desired_upload_limit)),
+                            },
+                        )
+                    self._request(
+                        "POST",
+                        "/api/v2/torrents/setDownloadLimit",
+                        data={
+                            "hashes": ih,
+                            "limit": str(_qbittorrent_rate_limit(self._desired_download_limit)),
+                        },
+                    )
+                except Exception as e:  # noqa: BLE001
+                    log.warning("could not apply rate limits to new torrent %s: %s", ih, e)
                 if self._downloads_paused:
                     try:
                         self._request("POST", "/api/v2/torrents/pause", data={"hashes": ih})
-                    except Exception:  # noqa: BLE001
+                    except Exception as e:  # noqa: BLE001
                         pass
                 elif self._seeding_paused:
                     try:
@@ -423,7 +455,7 @@ class QBittorrentSession:
                         ).json()
                         if info and self._progress(info[0]) >= 1.0:
                             self._request("POST", "/api/v2/torrents/pause", data={"hashes": ih})
-                    except Exception:  # noqa: BLE001
+                    except Exception as e:  # noqa: BLE001
                         pass
             return ih
         finally:
@@ -441,6 +473,20 @@ class QBittorrentSession:
     def _torrents(self) -> list[dict]:
         r = self._request("GET", "/api/v2/torrents/info", params={"category": self._category()})
         return r.json()
+
+    def begin_status_batch(self) -> None:
+        """Fetch torrents once for a paired global_status + torrents_status call."""
+        self._status_torrents = self._torrents()
+        self._status_batch = True
+
+    def end_status_batch(self) -> None:
+        self._status_torrents = None
+        self._status_batch = False
+
+    def _batch_or_fetch_torrents(self) -> list[dict]:
+        if self._status_batch and self._status_torrents is not None:
+            return self._status_torrents
+        return self._torrents()
 
     @staticmethod
     def _hash_of(t: dict) -> str:
@@ -511,7 +557,7 @@ class QBittorrentSession:
     def global_status(self) -> dict:
         storage_path = self._status_storage_path()
         try:
-            torrents = self._torrents()
+            torrents = self._batch_or_fetch_torrents()
             save_paths = {
                 str(t.get("save_path") or "").strip()
                 for t in torrents
@@ -574,6 +620,8 @@ class QBittorrentSession:
             }
         except Exception as e:  # noqa: BLE001
             log.warning("global_status failed: %s", e)
+            if not self._status_batch:
+                self._status_torrents = None
             return {
                 "download_rate": 0,
                 "upload_rate": 0,
@@ -593,7 +641,7 @@ class QBittorrentSession:
 
     def torrents_status(self) -> list[dict]:
         try:
-            torrents = self._torrents()
+            torrents = self._batch_or_fetch_torrents()
         except Exception as e:  # noqa: BLE001
             log.warning("torrents_status failed: %s", e)
             return []

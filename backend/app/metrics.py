@@ -72,17 +72,21 @@ class CoverageIndex:
         local torrents must not inflate the numerator.
         """
         seeded_bytes = 0
+        seen: set[str] = set()
         for t in torrents:
             ih = (t.get("infohash") or "").lower()
-            if not ih or ih not in self._by_hash:
+            if not ih or ih not in self._by_hash or ih in seen:
                 continue
             state = str(t.get("state") or "").lower()
             # Missing/errored content must not count as archive coverage.
             if "missing" in state or state == "error":
                 continue
             progress = _safe_progress(t.get("progress"))
+            seen.add(ih)
             seeded_bytes += int(self._by_hash[ih].data_size * progress)
         total = self.total_bytes
+        if seeded_bytes > total:
+            seeded_bytes = total
         pct = (seeded_bytes / total * 100.0) if total else 0.0
         return {
             "seeded_bytes": seeded_bytes,
@@ -113,4 +117,11 @@ if __name__ == "__main__":
         [{"infohash": "aabb", "progress": 1.0, "state": "missing_files", "is_complete": True}]
     )
     assert missing["seeded_bytes"] == 0
+    dup = idx.coverage_for_torrents(
+        [
+            {"infohash": "aabb", "progress": 1.0},
+            {"infohash": "aabb", "progress": 1.0},
+        ]
+    )
+    assert dup["seeded_bytes"] == 100
     print("ok: coverage case-insensitive + progress-weighted + unknown ignored")

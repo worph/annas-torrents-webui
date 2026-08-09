@@ -19,7 +19,7 @@
   body {
     margin: 0; background: var(--bg); color: var(--fg);
     font: 14px/1.5 system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    min-width: 1024px;
+    min-width: 320px;
   }
   header {
     padding: var(--space-4) var(--space-5); border-bottom: 1px solid var(--line);
@@ -74,6 +74,19 @@
   }
   @media (prefers-reduced-motion: reduce) {
     .bar > div, .n.flash, .impact-lead.flash { transition: none; animation: none; }
+  }
+  .visually-hidden {
+    position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px;
+    overflow: hidden; clip: rect(0, 0, 0, 0); white-space: nowrap; border: 0;
+  }
+  @media (max-width: 900px) {
+    .grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .controls-row { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 640px) {
+    .grid { grid-template-columns: 1fr; }
+    header { align-items: flex-start; }
+    .header-actions { margin-left: 0; width: 100%; justify-content: flex-start; flex-wrap: wrap; }
   }
 
   label { display: block; font-size: 12px; color: var(--muted); margin-bottom: var(--space-1); }
@@ -328,6 +341,8 @@
   body.view-mode #share-section,
   body.view-mode #settings-btn,
   body.view-mode #settings-modal,
+  body.view-mode #share-modal,
+  body.view-mode #remove-modal,
   body.view-mode #global-controls,
   body.view-mode #torrent-filters,
   body.view-mode .path-sensitive { display: none !important; }
@@ -565,7 +580,7 @@
       <p class="sub" id="share-public-note"></p>
       <div class="share-row">
         <button type="button" class="share-btn native" data-net="native" hidden>Share…</button>
-        <button type="button" class="share-btn x" data-net="x">𝕏</button>
+        <button type="button" class="share-btn x" data-net="x" aria-label="Share on X">𝕏</button>
         <button type="button" class="share-btn bluesky" data-net="bluesky">Bluesky</button>
         <button type="button" class="share-btn mastodon" data-net="mastodon">Mastodon</button>
         <button type="button" class="share-btn reddit" data-net="reddit">Reddit</button>
@@ -589,21 +604,21 @@
       <button type="button" class="filter-btn" data-filter="seeding" aria-pressed="false">Seeding</button>
       <button type="button" class="filter-btn" data-filter="paused" aria-pressed="false">Paused</button>
       <button type="button" class="filter-btn" data-filter="error" aria-pressed="false">Error</button>
-      <span class="table-count" id="torrent-filter-count"></span>
+      <span class="table-count" id="torrent-filter-count" role="status" aria-live="polite"></span>
     </div>
     <div class="table-wrap">
       <table>
-        <caption class="visually-hidden" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0,0,0,0)">Active torrents</caption>
+        <caption class="visually-hidden">Active torrents</caption>
         <thead>
           <tr id="torrent-head">
-            <th scope="col"><button type="button" class="sort-btn" data-key="name" aria-sort="none">Name <span class="ind" aria-hidden="true">▲</span></button></th>
-            <th scope="col" class="col-state"><button type="button" class="sort-btn" data-key="state" aria-sort="none">State <span class="ind" aria-hidden="true">▲</span></button></th>
-            <th scope="col" class="num col-progress"><button type="button" class="sort-btn" data-key="progress" aria-sort="none">Progress <span class="ind" aria-hidden="true">▲</span></button></th>
-            <th scope="col" class="num col-size"><button type="button" class="sort-btn" data-key="size" aria-sort="none">Size <span class="ind" aria-hidden="true">▲</span></button></th>
-            <th scope="col" class="num col-down"><button type="button" class="sort-btn" data-key="download_rate" aria-sort="none">Download <span class="ind" aria-hidden="true">▲</span></button></th>
-            <th scope="col" class="num col-rate"><button type="button" class="sort-btn" data-key="upload_rate" aria-sort="none">Upload <span class="ind" aria-hidden="true">▲</span></button></th>
-            <th scope="col" class="num col-seeds"><button type="button" class="sort-btn" data-key="num_seeds" aria-sort="none">Seeds <span class="ind" aria-hidden="true">▲</span></button></th>
-            <th scope="col" class="num col-peers"><button type="button" class="sort-btn" data-key="num_peers" aria-sort="none">Peers <span class="ind" aria-hidden="true">▲</span></button></th>
+            <th scope="col" aria-sort="none"><button type="button" class="sort-btn" data-key="name">Name <span class="ind" aria-hidden="true">▲</span></button></th>
+            <th scope="col" class="col-state" aria-sort="none"><button type="button" class="sort-btn" data-key="state">State <span class="ind" aria-hidden="true">▲</span></button></th>
+            <th scope="col" class="num col-progress" aria-sort="none"><button type="button" class="sort-btn" data-key="progress">Progress <span class="ind" aria-hidden="true">▲</span></button></th>
+            <th scope="col" class="num col-size" aria-sort="none"><button type="button" class="sort-btn" data-key="size">Size <span class="ind" aria-hidden="true">▲</span></button></th>
+            <th scope="col" class="num col-down" aria-sort="none"><button type="button" class="sort-btn" data-key="download_rate">Download <span class="ind" aria-hidden="true">▲</span></button></th>
+            <th scope="col" class="num col-rate" aria-sort="none"><button type="button" class="sort-btn" data-key="upload_rate">Upload <span class="ind" aria-hidden="true">▲</span></button></th>
+            <th scope="col" class="num col-seeds" aria-sort="none"><button type="button" class="sort-btn" data-key="num_seeds">Seeds <span class="ind" aria-hidden="true">▲</span></button></th>
+            <th scope="col" class="num col-peers" aria-sort="none"><button type="button" class="sort-btn" data-key="num_peers">Peers <span class="ind" aria-hidden="true">▲</span></button></th>
             <th scope="col" class="col-actions num">Actions</th>
           </tr>
         </thead>
@@ -657,8 +672,6 @@
       <p class="sub" style="margin:8px 0 0">Torrents already in another category are not moved.</p>
     </div>
     <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--line)">
-      <p class="sub" style="margin:0 0 8px">Clears only this browser’s share unlock history — does not pause, remove, or reset torrents.</p>
-      <button type="button" class="ghost" id="clear-history-btn">Clear share history</button>
       <span class="status-msg" id="settings-msg" role="status" aria-live="polite"></span>
     </div>
     <div class="modal-actions">
@@ -710,13 +723,14 @@ const VIEW_MODE = location.pathname.replace(/\/+$/, "") === "/view";
 const SAVE_PATH_KEY = "annas_save_path_v2";
 const PREALLOCATE_KEY = "annas_preallocate";
 const SORT_KEY = "annas_torrent_sort";
-const HISTORY_KEY = "annas_seed_history_v1";
 const FILTER_KEY = "annas_torrent_filter";
 const MASTODON_KEY = "mastodonInstance";
 const API_TOKEN_KEY = "annas_api_token";
 // Decimal Mbps: 1_000_000 bit/s = 125_000 B/s.
 const RATE_BPS_PER_MBPS = 125000;
 const RATE_PRESETS = [1, 5, 10, 25, 50];
+const FILTER_KEYS = new Set(["all", "downloading", "seeding", "paused", "error"]);
+const SORT_KEYS = new Set(["name", "state", "progress", "size", "download_rate", "upload_rate", "num_seeds", "num_peers"]);
 
 const STATE_LABELS = {
   downloading: "Downloading",
@@ -745,7 +759,6 @@ let settingsFocusBefore = null;
 let shareFocusBefore = null;
 let pendingRemove = null; // { infohash, name, size }
 let removeFocusBefore = null;
-let historyWrittenForRun = null;
 const memoryStorage = new Map();
 function storedGet(key) {
   try { return localStorage.getItem(key); } catch { return memoryStorage.get(key) || null; }
@@ -757,7 +770,7 @@ function storedRemove(key) {
   try { localStorage.removeItem(key); } catch { memoryStorage.delete(key); }
 }
 
-let torrentFilter = storedGet(FILTER_KEY) || "all";
+let torrentFilter = FILTER_KEYS.has(storedGet(FILTER_KEY) || "") ? storedGet(FILTER_KEY) : "all";
 let lastImpactBytes = null;
 let lastMetricText = {};
 let syncingControls = false;
@@ -792,12 +805,22 @@ function resetControlsChrome() {
   try {
     for (const id of ["pause-btn", "resume-btn", "pause-dl-btn", "resume-dl-btn"]) {
       const el = $(id);
-      if (el) el.classList.remove("active");
+      if (el) {
+        el.classList.remove("is-active");
+        el.disabled = true;
+      }
     }
-    const up = $("up-limit");
-    const down = $("down-limit");
-    if (up) up.value = "";
-    if (down) down.value = "";
+    for (const id of ["upload-limit", "download-limit", "upload-custom-mbps", "download-custom-mbps"]) {
+      const el = $(id);
+      if (el) {
+        el.disabled = true;
+        if (el.tagName === "SELECT") el.value = "-1";
+      }
+    }
+    for (const id of ["upload-custom-wrap", "download-custom-wrap"]) {
+      const el = $(id);
+      if (el) el.hidden = true;
+    }
     const section = $("global-controls");
     if (section) section.setAttribute("aria-disabled", "true");
   } finally {
@@ -827,6 +850,7 @@ function apiHeaders(withJson) {
 
 function authFailure() {
   authBlocked = true;
+  provisionInFlight = false;
   // Invalidate in-flight private responses (storage/space/controls/remove/pick).
   invalidateConnection();
   storageRequestId++;
@@ -868,6 +892,8 @@ function authFailure() {
   const shareActive = $("share-active");
   if (shareGate) shareGate.hidden = false;
   if (shareActive) shareActive.hidden = true;
+  const provisionBtn = $("provision-btn");
+  if (provisionBtn) provisionBtn.disabled = true;
   resetControlsChrome();
   clearSpacePreview();
 }
@@ -894,7 +920,7 @@ function apiFetch(url, opts = {}) {
   const withJson = !!(opts.body && typeof opts.body === "string");
   next.headers = { ...apiHeaders(withJson), ...(opts.headers || {}) };
   const generation = connectGeneration;
-  return fetchWithTimeout(url, next, timeoutMs).then((r) => {
+  return fetchWithTimeout(url, next, timeoutMs).then(async (r) => {
     // Ignore stale 401/503s from requests started before a successful re-auth.
     if (generation !== connectGeneration) return r;
     if (
@@ -904,10 +930,19 @@ function apiFetch(url, opts = {}) {
     ) {
       authFailure();
     }
+    // Only treat missing server token as auth failure — other 503s (backend
+    // changed, SSE caps) must reconnect, not wipe private UI.
     if (r.status === 503 && !VIEW_MODE && !String(url).includes("/public/")) {
-      // Private API unavailable (missing API_TOKEN) — clear sensitive UI.
-      authFailure();
-      setConnPill("degraded", "Server token missing");
+      let detail = "";
+      try {
+        detail = String((await r.clone().json())?.detail || "");
+      } catch {
+        detail = "";
+      }
+      if (detail === "API_TOKEN must be configured") {
+        authFailure();
+        setConnPill("degraded", "Server token missing");
+      }
     }
     return r;
   });
@@ -920,6 +955,7 @@ function eventsUrl(path, ticket) {
 
 function clearSpacePreview() {
   spaceRequestId++;
+  spaceFreeId++;
   spacePreview = null;
   const wrap = $("space-preview");
   if (wrap) wrap.hidden = true;
@@ -954,7 +990,9 @@ function safeParse(raw, fallback) {
 }
 
 let sort = safeParse(storedGet(SORT_KEY), { key: "state", dir: "asc" });
-if (!sort.key) sort = { key: "state", dir: "asc" };
+if (!sort || !SORT_KEYS.has(sort.key) || (sort.dir !== "asc" && sort.dir !== "desc")) {
+  sort = { key: "state", dir: "asc" };
+}
 
 /** Decimal SI units; GB/TB always 2 decimals. */
 function fmtBytes(n) {
@@ -1032,38 +1070,6 @@ function pillClass(key) {
   if (["downloading", "seeding", "paused", "stalled", "queued", "checking", "error"].includes(key))
     return "pill-" + key;
   return "";
-}
-
-function loadHistory() {
-  const h = safeParse(storedGet(HISTORY_KEY), []);
-  return Array.isArray(h) ? h : [];
-}
-
-function saveHistory(entries) {
-  storedSet(HISTORY_KEY, JSON.stringify(entries.slice(-40)));
-}
-
-function pushHistorySnapshot(s) {
-  // Public /view must never write private share-unlock history for this browser.
-  if (VIEW_MODE) return;
-  const c = s.coverage;
-  const g = s.global || {};
-  if (!c || !c.index_ready) return;
-  const seeded = Number(c.seeded_bytes) || 0;
-  if (seeded <= 0) return;
-  const entries = loadHistory();
-  const last = entries[entries.length - 1];
-  const now = Date.now();
-  // Throttle: at most one entry per 10 minutes unless coverage jumped
-  if (last && now - last.ts < 600000 && Math.abs((last.seeded_bytes || 0) - seeded) < 1000 ** 3) return;
-  entries.push({
-    ts: now,
-    seeded_bytes: seeded,
-    percent: c.percent,
-    torrents: g.num_torrents || 0,
-    total_upload: g.total_upload || 0,
-  });
-  saveHistory(entries);
 }
 
 function flashIfChanged(el, text) {
@@ -1177,13 +1183,17 @@ function sortedTorrents(rows) {
 }
 
 function paintSortHeaders() {
-  document.querySelectorAll("#torrent-head .sort-btn").forEach((btn) => {
+  document.querySelectorAll("#torrent-head th[scope='col']").forEach((th) => {
+    const btn = th.querySelector(".sort-btn");
+    if (!btn) return;
     if (btn.dataset.key === sort.key) {
-      btn.setAttribute("aria-sort", sort.dir === "asc" ? "ascending" : "descending");
-      btn.querySelector(".ind").textContent = sort.dir === "asc" ? "▲" : "▼";
+      th.setAttribute("aria-sort", sort.dir === "asc" ? "ascending" : "descending");
+      const ind = btn.querySelector(".ind");
+      if (ind) ind.textContent = sort.dir === "asc" ? "▲" : "▼";
     } else {
-      btn.setAttribute("aria-sort", "none");
-      btn.querySelector(".ind").textContent = "▲";
+      th.setAttribute("aria-sort", "none");
+      const ind = btn.querySelector(".ind");
+      if (ind) ind.textContent = "▲";
     }
   });
 }
@@ -1193,7 +1203,10 @@ function filterTorrents(rows) {
   if (torrentFilter === "all") return list;
   return list.filter((t) => {
     const key = torrentStateKey(t);
-    if (torrentFilter === "downloading") return key === "downloading" || key === "stalled" || key === "checking" || key === "queued";
+    if (torrentFilter === "downloading") {
+      return key === "downloading" || key === "stalled" || key === "checking"
+        || key === "queued" || key === "allocating" || key === "moving";
+    }
     if (torrentFilter === "seeding") return key === "seeding";
     if (torrentFilter === "paused") return key === "paused";
     if (torrentFilter === "error") return key === "error" || key === "missing_files";
@@ -1320,7 +1333,16 @@ function render(s) {
   if (connectionFrom(s) === "connected") {
     const section = $("global-controls");
     if (section) section.removeAttribute("aria-disabled");
+    for (const id of [
+      "pause-btn", "resume-btn", "pause-dl-btn", "resume-dl-btn",
+      "upload-limit", "download-limit", "upload-custom-mbps", "download-custom-mbps",
+    ]) {
+      const el = $(id);
+      if (el) el.disabled = false;
+    }
     syncControlsFromSnapshot(ctrl);
+  } else {
+    resetControlsChrome();
   }
 
   flashIfChanged($("m-up"), fmtRate(g.upload_rate));
@@ -1427,8 +1449,8 @@ function render(s) {
     detail.textContent = parts.join(" · ");
   } else if (p.phase === "error") {
     msg.textContent = p.message || "Something went wrong";
-    msg.classList.add("error");
     msg.classList.remove("ok");
+    msg.classList.add("error");
     detail.hidden = false;
     detail.textContent = "Contribution stopped with an error. Adjust the amount or destination and try again.";
   } else if (p.phase === "done") {
@@ -1438,17 +1460,14 @@ function render(s) {
     msg.textContent = success
       ? (p.message || "Done") + " — adding stopped; seeding continues."
       : (p.message || "Nothing was added") + (failed ? " — try again." : ".");
-    msg.classList.toggle("error", !success && failed > 0);
-    msg.classList.toggle("ok", success);
+    msg.classList.remove("error", "ok");
+    if (success) msg.classList.add("ok");
+    else if (failed > 0) msg.classList.add("error");
     detail.hidden = false;
     detail.textContent =
       `Finished · added ${added}` +
       (failed ? ` · failed ${failed}` : "") +
       (p.selected_bytes ? ` · selected ${fmtBytes(p.selected_bytes)}` : "");
-    if (success && historyWrittenForRun !== p.finished_at) {
-      historyWrittenForRun = p.finished_at;
-      pushHistorySnapshot(s);
-    }
   } else if (p.message && p.message !== "idle") {
     msg.textContent = p.message;
     msg.classList.remove("error", "ok");
@@ -1466,7 +1485,6 @@ function render(s) {
   }
 
   updateShareGate(s);
-  if (!p.running && hasVerifiedContribution(s)) pushHistorySnapshot(s);
 }
 
 // --- Storage destinations ---
@@ -1548,12 +1566,14 @@ function loadStorageOptions() {
       opt.value = "";
       opt.textContent = "Could not load destinations — restart the server";
       sel.appendChild(opt);
+      clearSpacePreview();
       updateSpaceDestLabel();
     });
 }
 
 $("save_path").addEventListener("change", () => {
   storedSet(SAVE_PATH_KEY, $("save_path").value);
+  storageRequestId++; // drop in-flight /api/storage that would overwrite the pick
   clearSpacePreview();
   updateSpaceDestLabel();
 });
@@ -1580,10 +1600,12 @@ $("browse-btn").addEventListener("click", async () => {
     else if (data.cancelled) { /* user cancelled */ }
     else {
       msg.textContent = "Folder picker returned no path.";
+      msg.classList.remove("ok");
       msg.classList.add("error");
     }
   } catch {
     msg.textContent = "Could not open the folder picker.";
+    msg.classList.remove("ok");
     msg.classList.add("error");
   } finally {
     btn.disabled = false;
@@ -1634,7 +1656,7 @@ $("provision-form").addEventListener("submit", async (e) => {
   provisionInFlight = true;
   $("provision-btn").disabled = true;
   msg.textContent = "Starting…";
-  msg.classList.remove("error");
+  msg.classList.remove("error", "ok");
   try {
     const r = await apiFetch("/api/provision", {
       method: "POST",
@@ -1644,6 +1666,7 @@ $("provision-form").addEventListener("submit", async (e) => {
     const data = await r.json().catch(() => ({}));
     if (!r.ok || data.ok === false) {
       msg.textContent = formatApiDetail(data.message || data.detail, "Could not start.");
+      msg.classList.remove("ok");
       msg.classList.add("error");
       $("provision-btn").disabled = false;
     }
@@ -1695,8 +1718,8 @@ function applyRateLimit(kind) {
     bytes_per_sec = -1;
   } else if (custom) {
     const mbps = parseFloat($(kind + "-custom-mbps").value);
-    if (!(mbps > 0)) {
-      setControlsMsg("Enter a positive Mbps value.", false);
+    if (!(mbps >= 0.1)) {
+      setControlsMsg("Enter at least 0.1 Mbps.", false);
       return;
     }
     bytes_per_sec = Math.round(mbps * RATE_BPS_PER_MBPS);
@@ -1722,7 +1745,8 @@ $("download-custom-mbps").addEventListener("change", () => {
 $("torrent-filters").addEventListener("click", (e) => {
   const btn = e.target.closest(".filter-btn");
   if (!btn) return;
-  torrentFilter = btn.dataset.filter || "all";
+  const next = btn.dataset.filter || "all";
+  torrentFilter = FILTER_KEYS.has(next) ? next : "all";
   storedSet(FILTER_KEY, torrentFilter);
   paintFilterButtons();
   if (lastSnapshot) renderTorrents(lastSnapshot.torrents || []);
@@ -1789,8 +1813,9 @@ function renderSpacePreview(data) {
 $("space-preview-btn").addEventListener("click", async () => {
   const msg = $("space-msg");
   const gb = parseFloat($("space-gb").value);
-  if (!(gb > 0) || gb > 1000000) {
+  if (!(gb >= 1) || gb > 1000000) {
     msg.textContent = "Enter a GB amount between 1 and 1,000,000.";
+    msg.classList.remove("ok");
     msg.classList.add("error");
     return;
   }
@@ -1905,6 +1930,7 @@ $("torrent-head").addEventListener("click", (e) => {
   const btn = e.target.closest(".sort-btn");
   if (!btn) return;
   const key = btn.dataset.key;
+  if (!SORT_KEYS.has(key)) return;
   if (sort.key === key) sort.dir = sort.dir === "asc" ? "desc" : "asc";
   else { sort.key = key; sort.dir = key === "name" || key === "state" ? "asc" : "desc"; }
   storedSet(SORT_KEY, JSON.stringify(sort));
@@ -2147,13 +2173,6 @@ $("settings-save").addEventListener("click", async () => {
   } finally {
     btn.disabled = false;
   }
-});
-
-$("clear-history-btn").addEventListener("click", () => {
-  storedRemove(HISTORY_KEY);
-  $("settings-msg").textContent = "Share history cleared.";
-  $("settings-msg").classList.remove("error");
-  updateShareGate(lastSnapshot);
 });
 
 // --- Sharing ---
@@ -2529,8 +2548,10 @@ async function connect() {
       scheduleReconnect(generation);
     };
   } catch (err) {
-    if (err && err.name === "AbortError") return;
-    if (generation !== connectGeneration) return;
+    // Intentional abort from invalidateConnection bumps generation / clears statusAbort.
+    // Timeout also uses AbortError but keeps generation — must reconnect.
+    if (generation !== connectGeneration || authBlocked) return;
+    if (err && err.name === "AbortError" && statusAbort !== abort) return;
     console.error("status bootstrap failed", err);
     setConnPill("reconnecting", "Reconnecting…");
     if (!VIEW_MODE) {

@@ -160,12 +160,17 @@ def quarantine_settings(data_dir: str, reason: str) -> str | None:
     path = settings_path(data_dir)
     if not os.path.isfile(path):
         return None
-    dest = f"{path}.corrupt.{int(time.time())}"
+    dest = f"{path}.corrupt.{int(time.time())}.{os.getpid()}"
     try:
         os.replace(path, dest)
     except OSError as e:
-        log.error("could not quarantine corrupt settings (%s): %s", reason, e)
-        raise ValueError(f"settings.json is corrupt: {reason}") from e
+        # Collision on same-second quarantine — try once more with a unique suffix.
+        dest = f"{path}.corrupt.{int(time.time())}.{os.getpid()}.{id(reason) & 0xFFFF:x}"
+        try:
+            os.replace(path, dest)
+        except OSError as e2:
+            log.error("could not quarantine corrupt settings (%s): %s", reason, e2)
+            raise ValueError(f"settings.json is corrupt: {reason}") from e2
     log.error("quarantined corrupt settings.json → %s (%s)", dest, reason)
     return dest
 

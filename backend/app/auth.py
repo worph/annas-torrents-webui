@@ -113,7 +113,11 @@ class ApiTokenMiddleware(BaseHTTPMiddleware):
 
 
 def redact_snapshot(snap: dict) -> dict:
-    """Strip hashes, paths, torrent names, controls, and settings from a live snapshot."""
+    """Strip hashes, paths, and torrent names from a live snapshot.
+
+    Pause/limit aggregates remain so /view can show whether the seedbox is
+    actively transferring without exposing private controls UI.
+    """
     g = snap.get("global") or {}
     raw_coverage = snap.get("coverage") or {}
     coverage = {

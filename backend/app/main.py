@@ -13,7 +13,7 @@ import time
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI, HTTPException, Query, Request
-from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field, field_validator
 
@@ -36,8 +36,8 @@ log = logging.getLogger("main")
 DATA_DIR = os.path.abspath(os.environ.get("DATA_DIR", "/data"))
 LISTEN_PORT = int(os.environ.get("TORRENT_PORT", "6881"))
 FRONTEND_DIR = os.environ.get("FRONTEND_DIR", "/app/frontend")
-# Public base URL used for share links (e.g. https://seed.example.com). When
-# empty, the frontend falls back to the browser's own origin.
+# Public base URL used for share links (e.g. https://seed.example.com).
+# When empty, share posts omit the /view link.
 PUBLIC_URL = os.environ.get("PUBLIC_URL", "").rstrip("/")
 # Reuse auth flags (do not re-parse env here — `not x in set` is easy to misread).
 if not auth_configured() and not ALLOW_UNAUTHENTICATED_API:
@@ -70,6 +70,7 @@ _session_thread_lock = threading.RLock()
 _provision_lock = asyncio.Lock()
 _provision_task: asyncio.Task | None = None
 _picked_paths: set[str] = set()
+_PICKED_PATHS_MAX = 64
 _picked_paths_lock = threading.Lock()
 # Bumped on every live session rebuild so space tokens cannot outlive a switch.
 _session_generation = 0
@@ -127,7 +128,7 @@ coverage_index = CoverageIndex()
 # Typed live-only provisioning state (no DB).
 provision_state: dict = {
     "running": False,
-    "phase": "idle",  # idle|selecting|downloading|adding|seeding|done|error
+    "phase": "idle",  # idle|selecting|downloading|adding|done|error
     "message": "idle",
     "added": 0,
     "failed": 0,
@@ -154,16 +155,29 @@ def _locked_call(fn, *args, **kwargs):
 
 
 async def _call_session(method: str, *args, **kwargs):
+    # Capture session under the asyncio lock, then release it for I/O so a slow
+    # qBit HTTP call cannot stall unrelated awaiters. Thread lock still serializes
+    # the session object itself.
     async with _session_lock:
         sess = session
-        return await asyncio.to_thread(_locked_call, getattr(sess, method), *args, **kwargs)
+        gen = _session_generation
+    result = await asyncio.to_thread(_locked_call, getattr(sess, method), *args, **kwargs)
+    async with _session_lock:
+        if session is not sess or _session_generation != gen:
+            raise RuntimeError("torrent backend changed")
+    return result
 
 
 async def _call_session_object(sess, method: str, *args, **kwargs):
     async with _session_lock:
         if session is not sess:
             raise RuntimeError("torrent backend changed")
-        return await asyncio.to_thread(_locked_call, getattr(sess, method), *args, **kwargs)
+        gen = _session_generation
+    result = await asyncio.to_thread(_locked_call, getattr(sess, method), *args, **kwargs)
+    async with _session_lock:
+        if session is not sess or _session_generation != gen:
+            raise RuntimeError("torrent backend changed")
+    return result
 
 
 class ProvisionRequest(BaseModel):
@@ -320,9 +334,16 @@ def _dump_snapshot(snap: dict) -> str:
 def _build_snapshot(sess=None, provision=None) -> dict:
     sess = sess or session
     provision = provision if provision is not None else dict(provision_state)
+    batch = hasattr(sess, "begin_status_batch") and hasattr(sess, "end_status_batch")
     try:
-        g = sess.global_status()
-        torrents = sess.torrents_status()
+        if batch:
+            sess.begin_status_batch()
+        try:
+            g = sess.global_status()
+            torrents = sess.torrents_status()
+        finally:
+            if batch:
+                sess.end_status_batch()
         backend_ok = bool(g.get("backend_ok", True))
         connection = "connected" if backend_ok else "degraded"
         return {
@@ -362,14 +383,17 @@ def _build_snapshot(sess=None, provision=None) -> dict:
 async def _snapshot_loop() -> None:
     while True:
         try:
-            # Write cache under the same lock that rebuilds the session so a
-            # backend switch cannot be overwritten by a stale in-flight snapshot.
+            # Build off the asyncio lock so remote I/O cannot stall other routes;
+            # only publish when the session generation still matches.
             async with _session_lock:
-                snap = await asyncio.to_thread(
-                    _locked_call, _build_snapshot, session, dict(provision_state)
-                )
-                _snapshot_cache["data"] = snap
-                _snapshot_cache["json"] = _dump_snapshot(snap)
+                sess = session
+                gen = _session_generation
+                provision = dict(provision_state)
+            snap = await asyncio.to_thread(_locked_call, _build_snapshot, sess, provision)
+            async with _session_lock:
+                if session is sess and _session_generation == gen:
+                    _snapshot_cache["data"] = snap
+                    _snapshot_cache["json"] = _dump_snapshot(snap)
         except Exception as e:  # noqa: BLE001
             log.warning("snapshot refresh failed: %s", e)
         await asyncio.sleep(1)
@@ -430,6 +454,13 @@ async def _available_free(sess, backend: str, dest: str | None) -> int | None:
             return None
         if status.get("disk_free") is None:
             return None
+        # qBit free_space_on_disk is only meaningful for the reported storage path.
+        if backend == "qbittorrent" and dest and dest != "multiple destinations":
+            reported = (status.get("storage_path") or "").strip()
+            if not reported or reported == "multiple destinations":
+                return None
+            if storage.path_key(reported) != storage.path_key(dest):
+                return None
         return max(0, int(status["disk_free"]))
     except Exception:  # noqa: BLE001
         return None
@@ -660,7 +691,14 @@ async def lifespan(_app: FastAPI):
             log.warning("session.close failed: %s", e)
 
 
-app = FastAPI(title="annas-torrents-webui", lifespan=lifespan)
+app = FastAPI(
+    title="annas-torrents-webui",
+    lifespan=lifespan,
+    # Hide OpenAPI when private APIs require a token — docs otherwise leak the contract.
+    docs_url=None if auth_required() else "/docs",
+    redoc_url=None if auth_required() else "/redoc",
+    openapi_url=None if auth_required() else "/openapi.json",
+)
 app.add_middleware(ApiTokenMiddleware)
 
 
@@ -707,6 +745,19 @@ async def events_ticket():
     return {"ticket": issue_sse_ticket()}
 
 
+def _provision_task_done(task: asyncio.Task) -> None:
+    """Safety net when cancel wins before ``_run_provision`` runs (no ``finally``)."""
+    if not provision_state.get("running"):
+        return
+    provision_state["running"] = False
+    if task.cancelled() and provision_state.get("finished_at") is None:
+        provision_state.update(
+            phase="error",
+            message="error: provisioning cancelled",
+            finished_at=time.time(),
+        )
+
+
 @app.post("/api/provision")
 async def provision(req: ProvisionRequest):
     global _provision_task
@@ -715,10 +766,15 @@ async def provision(req: ProvisionRequest):
             return {"ok": False, "message": "provisioning already in progress"}
         async with _session_lock:
             sess = session
-            allowed = await asyncio.to_thread(_locked_call, _allowed_paths, sess)
+            gen = _session_generation
+        allowed = await asyncio.to_thread(_locked_call, _allowed_paths, sess)
+        async with _session_lock:
+            if session is not sess or _session_generation != gen:
+                return {"ok": False, "message": "torrent backend changed"}
             save_path = _resolve_save_path(req.save_path, allowed, TORRENT_BACKEND)
             provision_state["running"] = True
             _provision_task = asyncio.create_task(_run_provision(req, save_path, sess))
+            _provision_task.add_done_callback(_provision_task_done)
     return {"ok": True, "message": "provisioning started"}
 
 
@@ -728,7 +784,7 @@ async def provision_cancel():
     global _provision_task
     async with _provision_lock:
         task = _provision_task
-        if not task or task.done() or not provision_state.get("running"):
+        if not task or task.done():
             return {"ok": False, "message": "no provisioning in progress"}
         task.cancel()
     return {"ok": True, "message": "provisioning cancel requested"}
@@ -744,34 +800,39 @@ async def storage_api():
     """Preset download destinations (default = repo DATA_DIR/content)."""
     async with _session_lock:
         sess = session
-        options = await asyncio.to_thread(_locked_call, sess.storage_options, STORAGE_PATHS)
-        seen = {storage.normalize_path(o["path"]) for o in options}
-        for t in await asyncio.to_thread(_locked_call, sess.torrents_status):
-            sp = (t.get("save_path") or "").strip()
-            if not sp:
-                continue
-            key = storage.normalize_path(sp)
-            if key in seen:
-                continue
-            seen.add(key)
-            maker = storage.remote_option if TORRENT_BACKEND == "qbittorrent" else storage.option
-            options.append(maker(sp, label=f"In use · {sp}"))
-        with _picked_paths_lock:
-            picked_snapshot = sorted(_picked_paths)
-        for picked in picked_snapshot:
-            key = storage.normalize_path(picked)
-            if key in seen:
-                continue
-            seen.add(key)
-            maker = storage.remote_option if TORRENT_BACKEND == "qbittorrent" else storage.option
-            options.append(maker(picked, label=f"Browse · {picked}"))
-        default = next((o["path"] for o in options if o.get("default")), options[0]["path"] if options else "")
-        g = await asyncio.to_thread(_locked_call, sess.global_status)
+        gen = _session_generation
+        backend = TORRENT_BACKEND
+    options = await asyncio.to_thread(_locked_call, sess.storage_options, STORAGE_PATHS)
+    seen = {storage.normalize_path(o["path"]) for o in options}
+    for t in await asyncio.to_thread(_locked_call, sess.torrents_status):
+        sp = (t.get("save_path") or "").strip()
+        if not sp:
+            continue
+        key = storage.normalize_path(sp)
+        if key in seen:
+            continue
+        seen.add(key)
+        maker = storage.remote_option if backend == "qbittorrent" else storage.option
+        options.append(maker(sp, label=f"In use · {sp}"))
+    with _picked_paths_lock:
+        picked_snapshot = sorted(_picked_paths)
+    for picked in picked_snapshot:
+        key = storage.normalize_path(picked)
+        if key in seen:
+            continue
+        seen.add(key)
+        maker = storage.remote_option if backend == "qbittorrent" else storage.option
+        options.append(maker(picked, label=f"Browse · {picked}"))
+    default = next((o["path"] for o in options if o.get("default")), options[0]["path"] if options else "")
+    g = await asyncio.to_thread(_locked_call, sess.global_status)
+    async with _session_lock:
+        if session is not sess or _session_generation != gen:
+            raise HTTPException(status_code=503, detail="torrent backend changed")
     return {
         "options": options,
         "default": default,
         "active": g.get("storage_path") or default,
-        "backend": TORRENT_BACKEND,
+        "backend": backend,
     }
 
 
@@ -792,6 +853,8 @@ async def storage_pick():
         raise HTTPException(status_code=400, detail=f"could not use folder: {e}") from e
     with _picked_paths_lock:
         _picked_paths.add(path)
+        while len(_picked_paths) > _PICKED_PATHS_MAX:
+            _picked_paths.pop()
     return {"ok": True, "cancelled": False, "path": path}
 
 
@@ -1156,15 +1219,27 @@ async def put_settings(req: SettingsRequest):
         if cat_only and hasattr(current_session, "set_category"):
             try:
                 if hasattr(current_session, "verify"):
+                    # Point at the new category before verify so create/check matches the save.
+                    await asyncio.to_thread(_locked_call, current_session.set_category, new_cat)
                     await asyncio.to_thread(_locked_call, current_session.verify)
+                else:
+                    await asyncio.to_thread(_locked_call, current_session.set_category, new_cat)
                 settings.save_settings(DATA_DIR, patch)
             except (ValueError, OSError, RuntimeError) as e:
+                try:
+                    await asyncio.to_thread(_locked_call, current_session.set_category, current_category)
+                except Exception:  # noqa: BLE001
+                    pass
                 raise HTTPException(status_code=400, detail=str(e)) from e
             except Exception as e:  # noqa: BLE001
+                try:
+                    await asyncio.to_thread(_locked_call, current_session.set_category, current_category)
+                except Exception:  # noqa: BLE001
+                    pass
                 raise HTTPException(status_code=400, detail=f"could not reach qBittorrent: {e}") from e
-            await asyncio.to_thread(_locked_call, session.set_category, new_cat)
             QBIT_CATEGORY = new_cat
             _session_generation += 1
+            _clear_snapshot_cache()
             return {"ok": True, "backend": TORRENT_BACKEND, "qbit_category": new_cat, "rebuilt": False}
 
         need_rebuild = conn_changed or (
@@ -1255,18 +1330,22 @@ async def put_settings(req: SettingsRequest):
 
 @app.get("/api/status")
 async def status():
-    # Snapshot + controls from the same session under one lock so a settings
-    # backend switch cannot mix old torrents with new control state.
+    # Snapshot + controls from the same session generation; release the asyncio
+    # lock during I/O so a slow backend cannot stall unrelated routes.
     async with _session_lock:
         sess = session
+        gen = _session_generation
         cached = _snapshot_cache["data"]
-        if cached is not None:
-            snap = dict(cached)
-        else:
-            snap = await asyncio.to_thread(
-                _locked_call, _build_snapshot, sess, dict(provision_state)
-            )
-        snap["controls"] = await asyncio.to_thread(_locked_call, sess.controls_state)
+        snap = dict(cached) if cached is not None else None
+    if snap is None:
+        snap = await asyncio.to_thread(
+            _locked_call, _build_snapshot, sess, dict(provision_state)
+        )
+    controls = await asyncio.to_thread(_locked_call, sess.controls_state)
+    async with _session_lock:
+        if session is not sess or _session_generation != gen:
+            raise HTTPException(status_code=503, detail="torrent backend changed")
+    snap["controls"] = controls
     return snap
 
 
@@ -1354,6 +1433,17 @@ async def public_events(request: Request):
 
 # ---- static frontend (mounted last so /api/* wins) ----------------------
 
+def _bake_view_mode_html(html: str) -> str:
+    """Ensure <body> carries view-mode so CSS hides private chrome without JS."""
+    if 'class="view-mode"' in html:
+        return html
+    if "<body>" in html:
+        return html.replace("<body>", '<body class="view-mode">', 1)
+    if "<body " in html:
+        return html.replace("<body ", '<body class="view-mode" ', 1)
+    return html
+
+
 if os.path.isdir(FRONTEND_DIR):
 
     @app.get("/")
@@ -1362,7 +1452,11 @@ if os.path.isdir(FRONTEND_DIR):
 
     @app.get("/view")
     async def view():
-        # Read-only "vantage" page — same SPA, rendered in view mode client-side.
-        return FileResponse(os.path.join(FRONTEND_DIR, "index.html"))
+        # Read-only vantage page: bake view-mode into HTML so CSS hides private
+        # chrome before/without JavaScript (API still serves redacted public data).
+        path = os.path.join(FRONTEND_DIR, "index.html")
+        with open(path, encoding="utf-8") as f:
+            html = f.read()
+        return HTMLResponse(_bake_view_mode_html(html))
 
     app.mount("/", StaticFiles(directory=FRONTEND_DIR), name="static")

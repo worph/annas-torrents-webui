@@ -216,25 +216,27 @@ class LibtorrentSession:
 
     def save_resume(self) -> None:
         """Persist fastresume data for all torrents so a restart resumes cleanly."""
-        pending = 0
+        pending: set[str] = set()
         for ih, h in list(self._handles.items()):
             try:
                 if not (h.is_valid() and h.status().has_metadata):
                     continue
                 h.save_resume_data()
-                pending += 1
+                pending.add(ih)
             except Exception:  # noqa: BLE001
                 continue
         deadline = time.time() + 3.0
-        while pending > 0 and time.time() < deadline:
+        while pending and time.time() < deadline:
             alerts = self._ses.pop_alerts()
             if not alerts:
                 time.sleep(0.05)
                 continue
             for a in alerts:
                 if isinstance(a, lt.save_resume_data_alert):
-                    pending -= 1
                     ih = str(a.handle.info_hash()).lower()
+                    if ih not in pending:
+                        continue
+                    pending.discard(ih)
                     data = lt.write_resume_data_buf(a.params)
                     path = os.path.join(self.resume_dir, ih + ".fastresume")
                     tmp = path + ".tmp"
@@ -242,7 +244,11 @@ class LibtorrentSession:
                         f.write(data)
                     os.replace(tmp, path)
                 elif type(a).__name__ == "save_resume_data_failed_alert":
-                    pending -= 1
+                    try:
+                        ih = str(a.handle.info_hash()).lower()
+                    except Exception:  # noqa: BLE001
+                        continue
+                    pending.discard(ih)
 
     def close(self) -> None:
         """Best-effort pause; libtorrent tears down with the process."""

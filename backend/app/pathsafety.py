@@ -69,11 +69,6 @@ def shared_content_ids(entries: list[tuple[str, str, str]]) -> set[str]:
     return shared
 
 
-def batch_has_shared_content(entries: list[tuple[str, str, str]]) -> bool:
-    """True if any pair in ``entries`` shares a content root."""
-    return bool(shared_content_ids(entries))
-
-
 def _is_reparse(path: str) -> bool:
     """True for symlinks and Windows junctions/mount points."""
     try:

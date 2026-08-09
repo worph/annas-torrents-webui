@@ -13,3 +13,6 @@ __pycache__
 docker-compose.override.yml
 docker-compose.*.yml
 README.md
+doc
+.github
+LICENSE
