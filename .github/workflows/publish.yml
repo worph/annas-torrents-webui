@@ -126,7 +126,7 @@ jobs:
           cleanup() { docker rm -f "$cid" >/dev/null 2>&1 || true; }
           trap cleanup EXIT
           ok=0
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:18080/api/healthz >/dev/null \
               && curl -fsS http://127.0.0.1:18080/api/health >/dev/null; then
               ok=1
@@ -143,7 +143,7 @@ jobs:
           cleanup() { docker rm -f "$cid" >/dev/null 2>&1 || true; }
           trap cleanup EXIT
           ok=0
-          for i in $(seq 1 60); do
+          for _ in $(seq 1 60); do
             if curl -fsS http://127.0.0.1:18081/api/healthz >/dev/null; then
               code=$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:18081/api/health)
               # readiness is auth-gated — without token expect 401
